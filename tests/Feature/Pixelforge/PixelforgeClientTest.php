@@ -25,6 +25,13 @@ class PixelforgeClientTest extends TestCase
         ], $status, $headers);
     }
 
+    public function test_rejects_a_non_https_base_url(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        new PixelforgeClient('http://pixelforge.test/v1', 'sk_test');
+    }
+
     public function test_sends_bearer_token_idempotency_key_and_metadata(): void
     {
         Http::fake(['*' => Http::response(['id' => 'gen_1'], 202)]);

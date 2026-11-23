@@ -7,6 +7,8 @@ use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Support\Facades\Log;
+use Throwable;
 
 /**
  * Copies a finished image off Pixelforge's expiring URL onto our disk.
@@ -43,5 +45,17 @@ class StoreGenerationImage implements ShouldBeUnique, ShouldQueue
     public function handle(GenerationWriter $writer): void
     {
         $writer->storeImageFor($this->generationId);
+    }
+
+    /**
+     * The provider URL stays as a fallback after the final attempt; leave a trace for
+     * operators because the image will expire 24h after completion.
+     */
+    public function failed(?Throwable $e): void
+    {
+        Log::warning('pixelforge.image_copy_exhausted', [
+            'generation_id' => $this->generationId,
+            'message' => $e?->getMessage(),
+        ]);
     }
 }

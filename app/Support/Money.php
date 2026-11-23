@@ -18,7 +18,10 @@ final class Money
     /**
      * Convert a "USD per 1M tokens" rate such as "12.50" into nanoUSD per token.
      *
-     * $12.50 per 1M tokens = $0.0000125 per token = 12_500 nano per token.
+     * $12.50 per 1M tokens = $0.0000125 per token = 12_500 nano per token. Rates with up
+     * to three fractional digits are exact because one thousandth of a dollar per
+     * million tokens is one nanodollar per token. Any finer precision cannot be
+     * represented, so it is rounded half-up to the nearest nano per token.
      */
     public static function rateToNanoPerToken(string $ratePerMillion): int
     {
@@ -28,9 +31,15 @@ final class Money
             throw new InvalidArgumentException("Not a decimal amount: {$ratePerMillion}");
         }
 
-        $cents = (int) $whole * 100 + (int) str_pad(substr($fraction, 0, 2), 2, '0');
+        $milli = (int) str_pad(substr($fraction, 0, 3), 3, '0');
+        $nano = (int) $whole * 1_000 + $milli;
 
-        return $cents * 10;
+        // Round half-up when the provider publishes a fourth decimal place.
+        if (strlen($fraction) > 3 && (int) $fraction[3] >= 5) {
+            $nano++;
+        }
+
+        return $nano;
     }
 
     /**

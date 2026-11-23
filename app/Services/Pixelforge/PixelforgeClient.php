@@ -10,6 +10,7 @@ use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use InvalidArgumentException;
 
 /**
  * Thin wrapper over Pixelforge's REST API.
@@ -23,7 +24,13 @@ class PixelforgeClient
     public function __construct(
         private readonly string $baseUrl,
         private readonly string $apiKey,
-    ) {}
+    ) {
+        // The bearer token is sent on every request, so never allow a plaintext base URL
+        // that could leak the key or let a misconfigured environment be intercepted.
+        if (parse_url($baseUrl, PHP_URL_SCHEME) !== 'https') {
+            throw new InvalidArgumentException('The Pixelforge base URL must use HTTPS.');
+        }
+    }
 
     public static function fromConfig(): self
     {

@@ -91,7 +91,8 @@ const isLongPrompt = computed(
         props.generation.prompt.split('\n').length > 3,
 );
 
-const promptExpanded = ref(false);
+const cardPromptExpanded = ref(false);
+const dialogPromptExpanded = ref(false);
 
 const createdAt = computed(() => {
     if (!props.generation.created_at) {
@@ -189,11 +190,14 @@ const costText = computed(() => {
                                     variant="link"
                                     size="sm"
                                     class="h-5 shrink-0 px-0 text-xs"
-                                    :aria-expanded="promptExpanded"
-                                    @click="promptExpanded = !promptExpanded"
+                                    :aria-expanded="dialogPromptExpanded"
+                                    @click="
+                                        dialogPromptExpanded =
+                                            !dialogPromptExpanded
+                                    "
                                 >
                                     {{
-                                        promptExpanded
+                                        dialogPromptExpanded
                                             ? 'Show less'
                                             : 'Read more'
                                     }}
@@ -204,7 +208,7 @@ const costText = computed(() => {
                             <div
                                 class="min-h-0 flex-1 rounded-md border bg-muted/30 px-3 py-2"
                                 :class="
-                                    promptExpanded
+                                    dialogPromptExpanded
                                         ? 'overflow-y-auto'
                                         : 'overflow-hidden'
                                 "
@@ -212,7 +216,9 @@ const costText = computed(() => {
                                 <p
                                     class="text-sm break-words whitespace-pre-wrap"
                                     :class="
-                                        promptExpanded ? '' : 'line-clamp-3'
+                                        dialogPromptExpanded
+                                            ? ''
+                                            : 'line-clamp-3'
                                     "
                                 >
                                     {{ generation.prompt }}
@@ -249,7 +255,31 @@ const costText = computed(() => {
                     }}</span>
                 </div>
 
-                <p class="line-clamp-2 text-sm">{{ generation.prompt }}</p>
+                <div class="space-y-1">
+                    <div
+                        :class="
+                            cardPromptExpanded ? 'max-h-40 overflow-y-auto' : ''
+                        "
+                    >
+                        <p
+                            class="text-sm break-words whitespace-pre-wrap"
+                            :class="cardPromptExpanded ? '' : 'line-clamp-2'"
+                        >
+                            {{ generation.prompt }}
+                        </p>
+                    </div>
+                    <Button
+                        v-if="isLongPrompt"
+                        type="button"
+                        variant="link"
+                        size="sm"
+                        class="h-auto px-0 text-xs"
+                        :aria-expanded="cardPromptExpanded"
+                        @click="cardPromptExpanded = !cardPromptExpanded"
+                    >
+                        {{ cardPromptExpanded ? 'Show less' : 'Read more' }}
+                    </Button>
+                </div>
 
                 <!-- Stage bar while the provider works. The width only advances on
                      status changes; polling supplies those every few seconds. -->

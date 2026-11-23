@@ -145,6 +145,49 @@ class GenerationSubmitTest extends TestCase
         $this->assertSame(0, Generation::query()->count());
     }
 
+    public function test_backoff_exposes_the_documented_delays_to_the_queue(): void
+    {
+        $this->assertSame([10, 30, 120, 600, 1800], (new SubmitGeneration('generation-id'))->backoff());
+    }
+
+    public function test_a_lost_connection_is_replayed_once_before_the_row_fails(): void
+    {
+        Queue::fake();
+
+        $user = User::factory()->create();
+        $generation = $this->createGeneration($user);
+
+        $succeeded = $this->succeededObject($generation->id);
+        $calls = 0;
+
+        Http::fake(function () use ($succeeded, &$calls) {
+            if ($calls++ === 0) {
+                throw new ConnectionException('Connection reset');
+            }
+
+            return Http::response($succeeded, 202);
+        });
+
+        $job = new SubmitGeneration($generation->id);
+
+        try {
+            $job->handle(app(PixelforgeClient::class), app(GenerationWriter::class));
+            $this->fail('The transport exception should have propagated.');
+        } catch (ConnectionException) {
+            // The worker calls failed() after this exception.
+        }
+
+        $job->failed(new ConnectionException('Connection reset'));
+
+        $generation->refresh();
+
+        $this->assertSame(Generation::STATUS_SUCCEEDED, $generation->status);
+        $this->assertSame($this->expectedChargedNano(), $generation->charged_nano);
+        $this->assertNull($generation->error_code);
+
+        Http::assertSent(fn ($request): bool => $request->header('Idempotency-Key')[0] === $generation->idempotency_key);
+    }
+
     public function test_pricing_transport_failure_is_reported_as_unavailable(): void
     {
         Http::fake(fn () => throw new ConnectionException('Connection refused'));

@@ -40,6 +40,15 @@ Reload the shell with `source ~/.zshrc`, then run everything from the project ro
 
 ```bash
 cp .env.example .env          # fill in the Pixelforge values
+
+# A fresh checkout has no vendor/ yet, so install Composer dependencies in a container
+# before `sail` (which lives in vendor/bin) exists. This works without host PHP.
+docker run --rm \
+  -u "$(id -u):$(id -g)" \
+  -v "$(pwd):/var/www/html" \
+  -w /var/www/html \
+  composer:2 install --no-interaction --prefer-dist
+
 sail up -d
 sail artisan migrate
 sail artisan storage:link
@@ -77,6 +86,7 @@ Webhooks need a public URL. The easiest option is a Cloudflare quick tunnel; it 
 
 ```bash
 docker run --rm --name pixelforge-tunnel \
+  --add-host host.docker.internal:host-gateway \
   cloudflare/cloudflared:latest \
   tunnel --url http://host.docker.internal:8001 --no-autoupdate
 ```
@@ -104,13 +114,11 @@ decimal strings for rates and exact integer token counts, so money never passes 
   per reference, exact output tokens by quality/size, and the per-quality reasoning range.
 - The worst-case quote is shown to the user ("pay at most") and snapshotted on the generation.
 - On success, the provider cost is recomputed from the generation's **stored rates** and its
-  reported usage, then the 25% markup is applied. The actual charge can be lower than the quote,
-  never higher.
+  reported usage, then the 25% markup is applied. If that would exceed the quoted maximum, the
+  charge is capped at the quote — but never below provider cost, so a rare rate change cannot
+  become a loss. The divergence is logged.
 - `completed_at` is the provider's completion time, so reports aggregate on the UTC day Pixelforge
   bills.
-
-The full reasoning, data model and compliance checklist are in
-[`docs/pixelforge-assessment.md`](docs/pixelforge-assessment.md).
 
 ## Webhook robustness
 
@@ -119,10 +127,13 @@ The full reasoning, data model and compliance checklist are in
 - Deliveries are deduplicated by Pixelforge's event id with a unique index, so a redelivery is
   acknowledged with `204` and never enqueued twice.
 - The state machine only moves forward, and `succeeded`/`failed` are final. A late `processing`
-  event cannot reopen a finished generation.
+  event cannot reopen a finished generation. The one exception is an ambiguous `submit_failed`:
+  a late success is still allowed to settle it so a provider-accepted generation is not lost.
 - Cost columns are written once, under a row lock, only on success.
 - A scheduled poller reconciles any generation that has not reached a terminal state, covering
   webhooks that were never delivered.
+- A scheduled sweep re-dispatches stored webhook events whose processing job was lost or
+  interrupted; the unique event id keeps normal redeliveries from creating duplicate work.
 
 ## Tests
 
@@ -189,4 +200,4 @@ using <http://localhost:8001> (Sail's nginx). It does not include the scheduler,
 ## Scope
 
 This branch contains the five required items. Credit balances and the admin report are stretch
-goals implemented separately; the plan documents their schema and branch layout.
+goals implemented separately.

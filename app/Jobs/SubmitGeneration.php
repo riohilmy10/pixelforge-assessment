@@ -11,6 +11,7 @@ use App\Services\Pixelforge\Exceptions\RetryableException;
 use App\Services\Pixelforge\PixelforgeClient;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -41,6 +42,12 @@ class SubmitGeneration implements ShouldQueue
      */
     private const BACKOFF_SECONDS = [10, 30, 120, 600, 1800];
 
+    /**
+     * Whether this worker actually attempted the provider call. It decides whether a
+     * final idempotent replay is useful when the job is marked failed by the queue.
+     */
+    private bool $createAttempted = false;
+
     public function __construct(public readonly string $generationId) {}
 
     /**
@@ -49,6 +56,17 @@ class SubmitGeneration implements ShouldQueue
     public function tries(): int
     {
         return 5;
+    }
+
+    /**
+     * Let Laravel apply the same delays to uncaught transport errors (for example a
+     * connection reset) as the explicit 429/503 releases below.
+     *
+     * @return array<int, int>
+     */
+    public function backoff(): array
+    {
+        return self::BACKOFF_SECONDS;
     }
 
     /**
@@ -63,6 +81,8 @@ class SubmitGeneration implements ShouldQueue
         if ($generation === null || $generation->isTerminal()) {
             return;
         }
+
+        $this->createAttempted = true;
 
         try {
             $object = $client->createGeneration(
@@ -152,10 +172,77 @@ class SubmitGeneration implements ShouldQueue
             return;
         }
 
+        // A connection failure after the request left our host is ambiguous: the provider
+        // may have accepted the generation even though we never saw the 202. Replaying the
+        // same idempotency key is safe and either returns the existing generation or
+        // creates the one that never reached us.
+        if ($this->createAttempted) {
+            $replayed = $this->replaySubmit($generation);
+
+            if ($replayed) {
+                return;
+            }
+        }
+
         app(GenerationWriter::class)->failLocal(
             $generation,
             $e instanceof PixelforgeException ? ($e->errorCode ?? 'submit_failed') : 'submit_failed',
             $e?->getMessage() ?? 'The generation could not be submitted after several attempts.',
         );
+    }
+
+    /**
+     * One final idempotent attempt when the queue gives up on an ambiguous error.
+     *
+     * Returns true when the provider answered and the generation was applied or failed
+     * for a definitive reason. Returns false when the provider is still unreachable, in
+     * which case the caller records a retryable `submit_failed` state that a late
+     * success webhook is still allowed to settle.
+     */
+    private function replaySubmit(Generation $generation): bool
+    {
+        try {
+            $object = app(PixelforgeClient::class)->createGeneration(
+                idempotencyKey: $generation->idempotency_key,
+                prompt: $generation->prompt,
+                size: $generation->size,
+                quality: $generation->quality,
+                referenceImages: $generation->reference_images ?? [],
+                metadata: ['generation_id' => $generation->id],
+            );
+
+            app(GenerationWriter::class)->apply($generation, $object);
+
+            return true;
+        } catch (RejectedException $e) {
+            app(GenerationWriter::class)->failLocal($generation, $e->errorCode ?? 'rejected', $e->getMessage());
+
+            return true;
+        } catch (IdempotencyConflictException $e) {
+            Log::critical('pixelforge.idempotency_conflict', [
+                'generation_id' => $generation->id,
+                'idempotency_key' => $generation->idempotency_key,
+                'message' => $e->getMessage(),
+            ]);
+
+            app(GenerationWriter::class)->failLocal($generation, 'idempotency_key_reused', $e->getMessage());
+
+            return true;
+        } catch (ConnectionException|PixelforgeException $e) {
+            Log::warning('pixelforge.submit_final_replay_failed', [
+                'generation_id' => $generation->id,
+                'message' => $e->getMessage(),
+            ]);
+
+            return false;
+        } catch (Throwable $e) {
+            // The replay is best-effort; never let it prevent the row from being recorded.
+            Log::error('pixelforge.submit_final_replay_error', [
+                'generation_id' => $generation->id,
+                'message' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
     }
 }

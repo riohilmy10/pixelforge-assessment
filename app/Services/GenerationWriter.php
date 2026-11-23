@@ -11,7 +11,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
-use Throwable;
 
 /**
  * Applies a Pixelforge generation object to our local row.
@@ -48,13 +47,18 @@ class GenerationWriter
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            // Terminal states are final. This is what makes duplicate and out-of-order
-            // webhooks harmless: the second `succeeded`, or a late `processing`, is a no-op.
-            if ($locked->isTerminal()) {
+            $incoming = (string) ($object['status'] ?? $locked->status);
+
+            // Terminal states are final, with one deliberate exception: a generation that
+            // we marked `submit_failed` may still have been accepted by Pixelforge when
+            // the connection broke. A late success is allowed to settle it (the user is
+            // then charged correctly); every other terminal state stays closed.
+            $ambiguousSubmit = $locked->status === Generation::STATUS_FAILED
+                && $locked->error_code === 'submit_failed';
+
+            if ($locked->isTerminal() && ! ($ambiguousSubmit && $incoming === Generation::STATUS_SUCCEEDED)) {
                 return $locked;
             }
-
-            $incoming = (string) ($object['status'] ?? $locked->status);
 
             // Status is a one-way ladder. A retried `generation.processing` arriving after
             // `generation.succeeded` has a lower rank and is ignored.
@@ -142,7 +146,9 @@ class GenerationWriter
      *
      * Money rule: Pixelforge reports token usage, never a price. We multiply each token
      * count by the rates saved on the generation (not the current pricing table) and
-     * then add the 25% markup. Integer nanodollars keep this exact.
+     * then add the 25% markup. Integer nanodollars keep this exact. If the result would
+     * exceed the quote shown to the user, it is capped at that quote unless doing so
+     * would drop below the provider cost.
      *
      * @param  array<string, mixed>  $object
      */
@@ -162,15 +168,27 @@ class GenerationWriter
         $providerCostNano = PricingService::costOfUsage($usage, $rates);
         $chargedNano = Money::withMarkup($providerCostNano, (int) config('services.pixelforge.markup_percent'));
 
-        // The quote is the promise shown to the user. Rates are fixed per generation,
-        // but a stale pricing cache can mean the snapshot was computed with older rates;
-        // never hide that silently if the final charge exceeds the stated maximum.
+        // The quote is the promise shown to the user. Rates are fixed per generation, but
+        // a stale pricing cache can mean the snapshot was computed with older rates. When
+        // the markup would exceed that promise, cap the charge at the quote — but never
+        // below the provider cost, because that would turn a rare rate change into a loss.
         if ($chargedNano > $locked->estimated_charged_nano) {
-            Log::warning('pixelforge.charge_exceeded_estimate', [
-                'generation_id' => $locked->id,
-                'estimated_charged_nano' => $locked->estimated_charged_nano,
-                'charged_nano' => $chargedNano,
-            ]);
+            if ($locked->estimated_charged_nano >= $providerCostNano) {
+                Log::warning('pixelforge.charge_capped_to_estimate', [
+                    'generation_id' => $locked->id,
+                    'estimated_charged_nano' => $locked->estimated_charged_nano,
+                    'uncapped_charged_nano' => $chargedNano,
+                ]);
+
+                $chargedNano = $locked->estimated_charged_nano;
+            } else {
+                Log::warning('pixelforge.charge_exceeded_estimate', [
+                    'generation_id' => $locked->id,
+                    'estimated_charged_nano' => $locked->estimated_charged_nano,
+                    'provider_cost_nano' => $providerCostNano,
+                    'charged_nano' => $chargedNano,
+                ]);
+            }
         }
 
         $locked->status = Generation::STATUS_SUCCEEDED;
@@ -219,8 +237,9 @@ class GenerationWriter
      *
      * Pixelforge's signed URL expires 24h after completion. We keep our own copy on the
      * configured image disk so the reviewer can still see it later. This runs from a
-     * queued, unique job and is best-effort: the provider URL remains in `image_url` as
-     * a fallback, and failing to download must never undo a settled generation.
+     * queued, unique, retried job: transient transport, HTTP and disk errors are thrown so
+     * the queue can try again. After the job's final attempt the provider URL remains in
+     * `image_url` as the fallback, and a failed copy must never undo a settled generation.
      */
     public function storeImageFor(string $generationId): void
     {
@@ -234,39 +253,25 @@ class GenerationWriter
             return;
         }
 
-        try {
-            $response = Http::timeout(30)->withoutRedirecting()->get($generation->image_url);
+        $response = Http::timeout(30)->withoutRedirecting()->get($generation->image_url);
 
-            if (! $response->successful()) {
-                Log::warning('pixelforge.image_download_failed', [
-                    'generation_id' => $generation->id,
-                    'status' => $response->status(),
-                ]);
-
-                return;
-            }
-
-            $disk = Storage::disk((string) config('filesystems.image_disk', 'public'));
-            $path = "generations/{$generation->id}.png";
-
-            // `throw` is disabled on the disks, so `put()` reports failure as `false`.
-            // Writing the path without checking would make the UI prefer a missing file
-            // over Pixelforge's still-valid URL.
-            if (! $disk->put($path, $response->body())) {
-                Log::warning('pixelforge.image_store_failed', [
-                    'generation_id' => $generation->id,
-                ]);
-
-                return;
-            }
-
-            // Only write the path; never touch money columns outside the settlement path.
-            $generation->forceFill(['stored_image_path' => $path])->save();
-        } catch (Throwable $e) {
-            Log::warning('pixelforge.image_download_error', [
-                'generation_id' => $generation->id,
-                'message' => $e->getMessage(),
-            ]);
+        if (! $response->successful()) {
+            throw new \RuntimeException(
+                "Pixelforge image download failed with status {$response->status()}.",
+            );
         }
+
+        $disk = Storage::disk((string) config('filesystems.image_disk', 'public'));
+        $path = "generations/{$generation->id}.png";
+
+        // `throw` is disabled on the disks, so `put()` reports failure as `false`. A false
+        // result must fail the job; writing the path would make the UI prefer a missing
+        // file over Pixelforge's still-valid URL.
+        if (! $disk->put($path, $response->body())) {
+            throw new \RuntimeException('The generated image could not be written to the image disk.');
+        }
+
+        // Only write the path; never touch money columns outside the settlement path.
+        $generation->forceFill(['stored_image_path' => $path])->save();
     }
 }

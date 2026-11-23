@@ -16,6 +16,14 @@ class MoneyTest extends TestCase
         $this->assertSame(1_000, Money::rateToNanoPerToken('1.00'));
     }
 
+    public function test_preserves_three_rate_decimals_and_rounds_finer_precision(): void
+    {
+        $this->assertSame(12_345, Money::rateToNanoPerToken('12.345'));
+        $this->assertSame(12_345, Money::rateToNanoPerToken('12.3454'));
+        $this->assertSame(12_346, Money::rateToNanoPerToken('12.3455'));
+        $this->assertSame(12_500, Money::rateToNanoPerToken('12.5'));
+    }
+
     public function test_parses_decimal_amounts_exactly(): void
     {
         $this->assertSame(46_125_000, Money::fromDecimal('0.046125000'));

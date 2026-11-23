@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Generation;
 use App\Models\WebhookEvent;
 use App\Services\GenerationWriter;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -18,7 +19,7 @@ use Throwable;
  * time we will process that event id. Even so, the writer is idempotent: duplicates at
  * the provider level and out-of-order deliveries still resolve to one final state.
  */
-class ProcessWebhookEvent implements ShouldQueue
+class ProcessWebhookEvent implements ShouldBeUnique, ShouldQueue
 {
     use InteractsWithQueue, Queueable;
 
@@ -38,7 +39,18 @@ class ProcessWebhookEvent implements ShouldQueue
         return [5, 30, 120];
     }
 
+    /**
+     * Coalesce a webhook-driven dispatch and a recovery sweep for the same event. The
+     * lock expires so a genuinely stuck or lost job can be picked up again.
+     */
+    public int $uniqueFor = 600;
+
     public function __construct(public readonly int $webhookEventId) {}
+
+    public function uniqueId(): string
+    {
+        return (string) $this->webhookEventId;
+    }
 
     /**
      * Match the event to a local generation and apply it.

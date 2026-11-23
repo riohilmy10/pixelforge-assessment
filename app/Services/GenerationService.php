@@ -11,6 +11,7 @@ use App\Services\Pixelforge\GenerationEstimate;
 use App\Services\Pixelforge\PricingService;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 /**
@@ -112,23 +113,29 @@ class GenerationService
             referenceImages: count($references),
         );
 
-        $generation = Generation::query()->create([
-            'user_id' => $user->id,
-            'idempotency_key' => (string) Str::uuid(),
-            'status' => Generation::STATUS_PENDING,
-            'prompt' => $data['prompt'],
-            'size' => $data['size'],
-            'quality' => $data['quality'],
-            'reference_images' => $references,
-            // Snapshot the worst case: this is the "up to" figure the user saw. The actual
-            // charge is written later on success and can only be lower.
-            'estimated_provider_cost_nano' => $estimate->maxProviderCostNano,
-            'estimated_charged_nano' => $estimate->maxChargedNano,
-        ]);
+        // The row and its queue job are one unit of work: if enqueueing fails, the user
+        // must not be left with a pending generation that no worker will ever see. With
+        // the database queue both inserts commit together; the worker cannot see the job
+        // before the row is visible either.
+        return DB::transaction(function () use ($user, $data, $references, $estimate): Generation {
+            $generation = Generation::query()->create([
+                'user_id' => $user->id,
+                'idempotency_key' => (string) Str::uuid(),
+                'status' => Generation::STATUS_PENDING,
+                'prompt' => $data['prompt'],
+                'size' => $data['size'],
+                'quality' => $data['quality'],
+                'reference_images' => $references,
+                // Snapshot the worst case: this is the "up to" figure the user saw. Settlement
+                // caps at it when possible, and never charges below the provider cost.
+                'estimated_provider_cost_nano' => $estimate->maxProviderCostNano,
+                'estimated_charged_nano' => $estimate->maxChargedNano,
+            ]);
 
-        SubmitGeneration::dispatch($generation->id);
+            SubmitGeneration::dispatch($generation->id);
 
-        return $generation;
+            return $generation;
+        });
     }
 
     /**

@@ -20,3 +20,10 @@ Schedule::command('pixelforge:poll')
 Schedule::command('pixelforge:prune-webhook-events')
     ->dailyAt('03:00')
     ->onOneServer();
+
+// A webhook row is inserted before its job is queued; if the process dies in between, no
+// duplicate delivery arrives to save it. Sweep old unprocessed rows and dispatch again.
+Schedule::command('pixelforge:retry-unprocessed-webhooks')
+    ->everyFiveMinutes()
+    ->withoutOverlapping()
+    ->onOneServer();

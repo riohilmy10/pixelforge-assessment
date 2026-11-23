@@ -257,4 +257,68 @@ class WebhookTest extends TestCase
         $this->assertNotNull(WebhookEvent::query()->sole()->processed_at);
         $this->assertSame(0, Generation::query()->count());
     }
+
+    public function test_late_success_settles_an_ambiguous_submit_failure(): void
+    {
+        Queue::fake();
+
+        $user = User::factory()->create();
+        $generation = $this->createGeneration($user);
+
+        app(GenerationWriter::class)->failLocal($generation, 'submit_failed', 'Connection closed.');
+
+        app(GenerationWriter::class)->apply(
+            $generation->fresh(),
+            $this->succeededObject($generation->id),
+        );
+
+        $generation->refresh();
+
+        $this->assertSame(Generation::STATUS_SUCCEEDED, $generation->status);
+        $this->assertSame($this->expectedChargedNano(), $generation->charged_nano);
+        $this->assertNull($generation->error_code);
+        $this->assertNull($generation->error_message);
+    }
+
+    public function test_a_real_provider_failure_stays_final_when_a_success_arrives(): void
+    {
+        Queue::fake();
+
+        $user = User::factory()->create();
+        $generation = $this->createGeneration($user);
+
+        app(GenerationWriter::class)->apply($generation, $this->generationObject([
+            'status' => Generation::STATUS_FAILED,
+            'metadata' => ['generation_id' => $generation->id],
+            'error' => ['code' => 'generation_failed', 'message' => 'The model failed.'],
+        ]));
+
+        app(GenerationWriter::class)->apply(
+            $generation->fresh(),
+            $this->succeededObject($generation->id),
+        );
+
+        $generation->refresh();
+
+        $this->assertSame(Generation::STATUS_FAILED, $generation->status);
+        $this->assertSame('generation_failed', $generation->error_code);
+        $this->assertNull($generation->charged_nano);
+    }
+
+    public function test_settlement_is_capped_at_the_quoted_maximum_without_going_below_cost(): void
+    {
+        Queue::fake();
+
+        $user = User::factory()->create();
+        $generation = $this->createGeneration($user, [
+            'estimated_provider_cost_nano' => $this->expectedProviderCostNano(),
+            'estimated_charged_nano' => $this->expectedProviderCostNano(),
+        ]);
+
+        app(GenerationWriter::class)->apply($generation, $this->succeededObject($generation->id));
+
+        $generation->refresh();
+
+        $this->assertSame($this->expectedProviderCostNano(), $generation->charged_nano);
+    }
 }

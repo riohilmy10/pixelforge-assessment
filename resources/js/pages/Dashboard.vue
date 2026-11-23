@@ -49,10 +49,12 @@ const form = useForm({
 });
 
 const quote = ref<Estimate | null>(null);
+const quotedSignature = ref<string | null>(null);
 const quoting = ref(false);
 const quoteError = ref<string | null>(null);
 let quoteTimer: number | undefined;
 let quoteController: AbortController | null = null;
+let quoteRequestId = 0;
 
 /** Server feedback: queued confirmation, or "pricing unavailable, nothing submitted". */
 const page = usePage();
@@ -63,6 +65,24 @@ const flash = computed(
 /** Blanks are not reference images and must not count towards the 765-token charge. */
 const references = computed(() =>
     form.reference_images.map((url) => url.trim()).filter(Boolean),
+);
+
+/**
+ * The exact inputs a quote was requested for. Keeping a signature lets the form reject
+ * a stale quote and prevents an older request from overwriting a newer answer.
+ */
+const quoteInputs = computed(() => ({
+    prompt: form.prompt,
+    size: form.size,
+    quality: form.quality,
+    reference_images: references.value,
+}));
+
+const quoteSignature = computed(() => JSON.stringify(quoteInputs.value));
+
+const quoteMatchesInputs = computed(
+    () =>
+        quote.value !== null && quotedSignature.value === quoteSignature.value,
 );
 
 /**
@@ -82,6 +102,10 @@ function xsrfToken(): string {
  * the number shown here matches the stored promise.
  */
 async function refreshQuote(): Promise<void> {
+    const signature = quoteSignature.value;
+    const payload = quoteInputs.value;
+    const requestId = ++quoteRequestId;
+
     quoteController?.abort();
     quoteController = new AbortController();
     quoting.value = true;
@@ -99,12 +123,7 @@ async function refreshQuote(): Promise<void> {
             },
             credentials: 'same-origin',
             signal: quoteController.signal,
-            body: JSON.stringify({
-                prompt: form.prompt,
-                size: form.size,
-                quality: form.quality,
-                reference_images: references.value,
-            }),
+            body: JSON.stringify(payload),
         });
 
         if (!response.ok) {
@@ -112,14 +131,32 @@ async function refreshQuote(): Promise<void> {
         }
 
         const data = (await response.json()) as { estimate: Estimate };
-        quote.value = data.estimate;
-    } catch (error) {
-        if ((error as Error).name !== 'AbortError') {
-            quoteError.value =
-                'Could not load the price. Try again in a moment.';
+
+        // A newer request (or an input change) has superseded this response.
+        if (requestId !== quoteRequestId) {
+            return;
         }
+
+        quote.value = data.estimate;
+        quotedSignature.value = signature;
+    } catch (error) {
+        if ((error as Error).name === 'AbortError') {
+            return;
+        }
+
+        if (requestId !== quoteRequestId) {
+            return;
+        }
+
+        quoteError.value = 'Could not load the price. Try again in a moment.';
+        quote.value = null;
+        quotedSignature.value = null;
     } finally {
-        quoting.value = false;
+        // Only the active request owns the loading flag; an aborted older request must
+        // not clear the spinner of the request that replaced it.
+        if (requestId === quoteRequestId) {
+            quoting.value = false;
+        }
     }
 }
 
@@ -128,13 +165,18 @@ async function refreshQuote(): Promise<void> {
  * gives Vue one stable scalar to watch while still reacting to add/remove/edit.
  */
 watch(
-    () => [
-        form.prompt,
-        form.size,
-        form.quality,
-        form.reference_images.join('\u0000'),
-    ],
+    quoteSignature,
     () => {
+        // Invalidate the displayed promise immediately. Until a quote for these exact
+        // inputs arrives, the form cannot submit.
+        quoteRequestId++;
+        quoteController?.abort();
+        quoteController = null;
+        quote.value = null;
+        quotedSignature.value = null;
+        quoteError.value = null;
+        quoting.value = false;
+
         window.clearTimeout(quoteTimer);
         quoteTimer = window.setTimeout(() => void refreshQuote(), 300);
     },
@@ -151,6 +193,10 @@ onBeforeUnmount(() => {
  * the POST body identical to what the quote counted.
  */
 function submit(): void {
+    if (form.processing || quoting.value || !quoteMatchesInputs.value) {
+        return;
+    }
+
     form.transform((data) => ({
         ...data,
         reference_images: data.reference_images
@@ -160,9 +206,17 @@ function submit(): void {
 
     form.post(storeRoute.url(), {
         preserveScroll: true,
-        onSuccess: () => {
-            form.reset('prompt', 'reference_images');
-            form.reference_images = [''];
+        onSuccess: (page) => {
+            const flashError = (
+                page.props.flash as { error?: string | null } | undefined
+            )?.error;
+
+            // Pricing failures redirect back with a flash error. Keep the prompt and
+            // references so the user can retry instead of retyping them.
+            if (!flashError) {
+                form.reset('prompt', 'reference_images');
+                form.reference_images = [''];
+            }
         },
     });
 }
@@ -283,7 +337,11 @@ watch(
 
                         <Button
                             type="submit"
-                            :disabled="form.processing || quoting"
+                            :disabled="
+                                form.processing ||
+                                quoting ||
+                                !quoteMatchesInputs
+                            "
                         >
                             {{ form.processing ? 'Submitting…' : 'Generate' }}
                         </Button>
@@ -304,6 +362,13 @@ watch(
 
                     <div
                         v-else-if="!quote"
+                        class="text-sm text-muted-foreground"
+                    >
+                        Calculating…
+                    </div>
+
+                    <div
+                        v-else-if="!quoteMatchesInputs"
                         class="text-sm text-muted-foreground"
                     >
                         Calculating…

@@ -56,7 +56,8 @@ class WebhookService
         ]);
 
         // Already seen. The docs allow repeated delivery; the caller still gets 204 so the
-        // provider stops retrying and no extra work is queued.
+        // provider stops retrying. An event row is not proof its job ran, so the scheduled
+        // `pixelforge:retry-unprocessed-webhooks` sweep recovers interrupted dispatches.
         if ($inserted === 0) {
             Log::info('pixelforge.webhook_duplicate', [
                 'event_id' => $eventId,

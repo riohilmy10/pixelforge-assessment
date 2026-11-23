@@ -190,4 +190,35 @@ describe('GenerationCard', () => {
 
         wrapper.unmount();
     });
+
+    it('expands a long prompt on the card without opening the image dialog', async () => {
+        const wrapper = mount(GenerationCard, {
+            props: {
+                generation: generation({
+                    status: 'failed',
+                    is_active: false,
+                    is_terminal: true,
+                    prompt: 'A lighthouse on a cliff at dawn. '.repeat(20),
+                    image_url: null,
+                    error_message: 'The model could not produce an image.',
+                }),
+            },
+        });
+
+        const readMore = wrapper
+            .findAll('button')
+            .find((button) => button.text() === 'Read more');
+
+        expect(readMore).toBeDefined();
+        expect(wrapper.find('p.line-clamp-2').exists()).toBe(true);
+
+        await readMore?.trigger('click');
+
+        expect(wrapper.find('p.line-clamp-2').exists()).toBe(false);
+        expect(wrapper.find('.max-h-40.overflow-y-auto').exists()).toBe(true);
+        expect(wrapper.text()).toContain('Show less');
+        expect(document.querySelector('[role="dialog"]')).toBeNull();
+
+        wrapper.unmount();
+    });
 });
