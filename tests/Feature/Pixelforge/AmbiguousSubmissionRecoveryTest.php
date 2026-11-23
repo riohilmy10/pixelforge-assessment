@@ -45,7 +45,9 @@ class AmbiguousSubmissionRecoveryTest extends TestCase
     {
         $stamped = [];
 
-        foreach ([1, 2] as $index) {
+        // Older than the command's five-minute cooldown, so all three rows are eligible
+        // and the ordering (not the cooldown) decides which one is replayed first.
+        foreach ([6, 7] as $index) {
             $generation = $this->ambiguousGeneration();
             $generation->forceFill([
                 'submission_recovery_attempted_at' => now()->subMinutes($index),
