@@ -32,6 +32,19 @@ export default defineConfig({
         }),
     ]),
     server: {
+        // The app can be opened on a Sail/Laravel host (localhost, *.test,
+        // *.localhost) or an OrbStack domain (*.orb.local), while the dev
+        // assets are always served from localhost:VITE_PORT. Without these
+        // origins the browser blocks every module script with a CORS error.
+        cors: {
+            origin: [
+                /^https?:\/\/localhost(:\d+)?$/,
+                /^https?:\/\/127\.0\.0\.1(:\d+)?$/,
+                /^https?:\/\/[^/]+\.localhost(:\d+)?$/,
+                /^https?:\/\/[^/]+\.test(:\d+)?$/,
+                /^https?:\/\/[^/]+\.orb\.local(:\d+)?$/,
+            ],
+        },
         watch: {
             ignored: [
                 '**/.agents/**',

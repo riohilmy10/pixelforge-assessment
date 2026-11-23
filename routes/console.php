@@ -2,7 +2,21 @@
 
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Schedule;
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
+
+// Safety net for missed webhooks: poll non-terminal generations once a minute. The
+// command caps itself at 20 provider calls per run and skips recently synced rows.
+Schedule::command('pixelforge:poll')
+    ->everyMinute()
+    ->withoutOverlapping()
+    ->onOneServer();
+
+// Processed webhook deliveries carry the full provider payload and are only kept for
+// debugging, so bound how long they accumulate.
+Schedule::command('pixelforge:prune-webhook-events')
+    ->dailyAt('03:00')
+    ->onOneServer();

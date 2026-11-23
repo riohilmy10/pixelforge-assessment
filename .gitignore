@@ -1,5 +1,6 @@
 /.phpunit.cache
 /bootstrap/ssr
+/docs/pixelforge-assessment.md
 /node_modules
 /public/build
 /public/fonts-manifest.dev.json
@@ -31,6 +32,7 @@ yarn-error.log
 /.amp
 /.claude
 /.codex
+/.commandcode
 /.cursor
 /.factory
 /.grok
