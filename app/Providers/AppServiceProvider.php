@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Services\Pixelforge\PixelforgeClient;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
@@ -15,7 +16,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // PixelforgeClient takes its base URL and key from config, so bind it explicitly
+        // rather than letting the container try to autowire two scalar parameters.
+        $this->app->singleton(PixelforgeClient::class, fn (): PixelforgeClient => PixelforgeClient::fromConfig());
     }
 
     /**

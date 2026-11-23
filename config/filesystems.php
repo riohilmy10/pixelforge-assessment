@@ -17,6 +17,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Generated Image Disk
+    |--------------------------------------------------------------------------
+    |
+    | Finished generations are copied off Pixelforge's expiring URL. Locally
+    | the public disk is served by `php artisan storage:link`; in production
+    | point this at a durable disk such as "s3".
+    |
+    */
+
+    'image_disk' => env('FILESYSTEM_IMAGE_DISK', 'public'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Filesystem Disks
     |--------------------------------------------------------------------------
     |

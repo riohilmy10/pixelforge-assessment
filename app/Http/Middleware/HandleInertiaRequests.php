@@ -41,6 +41,12 @@ class HandleInertiaRequests extends Middleware
             'auth' => [
                 'user' => $request->user(),
             ],
+            // Short-lived feedback for the generator (queued, or pricing unavailable).
+            'flash' => [
+                'status' => fn (): ?string => $request->session()->get('status'),
+                'error' => fn (): ?string => $request->session()->get('error'),
+                'updated_quote' => fn (): ?array => $request->session()->get('updated_quote'),
+            ],
             'sidebarOpen' => ! $request->hasCookie('sidebar_state') || $request->cookie('sidebar_state') === 'true',
         ];
     }
