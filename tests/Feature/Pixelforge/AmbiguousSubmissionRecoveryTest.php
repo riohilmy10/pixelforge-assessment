@@ -41,6 +41,38 @@ class AmbiguousSubmissionRecoveryTest extends TestCase
         return $generation;
     }
 
+    public function test_untouched_rows_are_replayed_before_previously_attempted_ones(): void
+    {
+        $stamped = [];
+
+        foreach ([1, 2] as $index) {
+            $generation = $this->ambiguousGeneration();
+            $generation->forceFill([
+                'submission_recovery_attempted_at' => now()->subMinutes($index),
+            ])->save();
+            $stamped[] = $generation;
+        }
+
+        $untouched = $this->ambiguousGeneration();
+
+        Http::fake([
+            '*/generations' => Http::response($this->generationObject([
+                'id' => 'gen_recovered',
+                'status' => Generation::STATUS_QUEUED,
+            ]), 202),
+        ]);
+
+        $this->artisan('pixelforge:reconcile-ambiguous-submissions', ['--limit' => 1])
+            ->assertSuccessful();
+
+        $this->assertSame(Generation::STATUS_QUEUED, $untouched->fresh()->status);
+
+        foreach ($stamped as $generation) {
+            $this->assertSame(Generation::STATUS_FAILED, $generation->fresh()->status);
+            $this->assertSame('submit_failed', $generation->fresh()->error_code);
+        }
+    }
+
     public function test_a_queued_replay_reopens_the_generation_for_normal_polling(): void
     {
         $generation = $this->ambiguousGeneration();

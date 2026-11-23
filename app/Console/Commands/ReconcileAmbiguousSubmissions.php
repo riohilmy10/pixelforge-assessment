@@ -39,7 +39,9 @@ class ReconcileAmbiguousSubmissions extends Command
             ->where(fn ($query) => $query
                 ->whereNull('submission_recovery_attempted_at')
                 ->orWhere('submission_recovery_attempted_at', '<=', now()->subMinutes($minutes)))
-            ->orderBy('submission_recovery_attempted_at')
+            // PostgreSQL sorts NULLs last on ASC by default; untouched rows must be
+            // replayed before previously attempted ones so a small --limit cannot starve.
+            ->orderByRaw('submission_recovery_attempted_at ASC NULLS FIRST')
             ->orderBy('id')
             ->limit($limit)
             ->get();
