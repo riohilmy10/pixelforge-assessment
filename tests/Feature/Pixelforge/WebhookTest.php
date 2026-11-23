@@ -103,7 +103,7 @@ class WebhookTest extends TestCase
         Storage::fake('public');
 
         Http::fake([
-            'https://pixelforge.test/images/*' => Http::response('PNG-BYTES', 200, ['Content-Type' => 'image/png']),
+            'https://pixelforge.test/images/*' => Http::response("\x89PNG\r\n\x1a\n", 200, ['Content-Type' => 'image/png']),
         ]);
 
         $user = User::factory()->create();
@@ -168,7 +168,7 @@ class WebhookTest extends TestCase
         Storage::fake('public');
 
         Http::fake([
-            'https://pixelforge.test/images/*' => Http::response('PNG-BYTES', 200),
+            'https://pixelforge.test/images/*' => Http::response("\x89PNG\r\n\x1a\n", 200),
         ]);
 
         $user = User::factory()->create();
@@ -196,7 +196,7 @@ class WebhookTest extends TestCase
         Storage::fake('public');
 
         Http::fake([
-            'https://pixelforge.test/images/*' => Http::response('PNG-BYTES', 200),
+            'https://pixelforge.test/images/*' => Http::response("\x89PNG\r\n\x1a\n", 200),
         ]);
 
         $user = User::factory()->create();
@@ -303,6 +303,27 @@ class WebhookTest extends TestCase
         $this->assertSame(Generation::STATUS_FAILED, $generation->status);
         $this->assertSame('generation_failed', $generation->error_code);
         $this->assertNull($generation->charged_nano);
+    }
+
+    public function test_settlement_charges_only_provider_cost_when_the_quote_is_too_low(): void
+    {
+        Queue::fake();
+        $generation = $this->createGeneration(User::factory()->create(), ['estimated_charged_nano' => 1]);
+
+        app(GenerationWriter::class)->apply($generation, $this->succeededObject($generation->id));
+
+        $this->assertSame($this->expectedProviderCostNano(), $generation->fresh()->charged_nano);
+    }
+
+    public function test_negative_markup_cannot_reduce_the_charge_below_provider_cost(): void
+    {
+        Queue::fake();
+        config(['services.pixelforge.markup_percent' => -25]);
+        $generation = $this->createGeneration(User::factory()->create());
+
+        app(GenerationWriter::class)->apply($generation, $this->succeededObject($generation->id));
+
+        $this->assertSame($this->expectedProviderCostNano(), $generation->fresh()->charged_nano);
     }
 
     public function test_settlement_is_capped_at_the_quoted_maximum_without_going_below_cost(): void

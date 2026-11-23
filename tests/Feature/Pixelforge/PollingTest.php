@@ -43,7 +43,7 @@ class PollingTest extends TestCase
                     'metadata' => ['generation_id' => $generation->id],
                 ]),
             ),
-            'https://pixelforge.test/images/*' => Http::response('PNG-BYTES', 200),
+            'https://pixelforge.test/images/*' => Http::response("\x89PNG\r\n\x1a\n", 200),
         ]);
 
         $this->artisan('pixelforge:poll')->assertSuccessful();

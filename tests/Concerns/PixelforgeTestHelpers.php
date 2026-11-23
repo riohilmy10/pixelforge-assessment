@@ -81,7 +81,7 @@ trait PixelforgeTestHelpers
             'quality' => 'medium',
             'reference_images' => [],
             'estimated_provider_cost_nano' => 0,
-            'estimated_charged_nano' => 0,
+            'estimated_charged_nano' => $this->expectedChargedNano(),
         ], $overrides));
     }
 

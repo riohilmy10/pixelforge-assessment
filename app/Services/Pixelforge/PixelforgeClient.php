@@ -2,6 +2,7 @@
 
 namespace App\Services\Pixelforge;
 
+use App\Services\GenerationService;
 use App\Services\Pixelforge\Exceptions\IdempotencyConflictException;
 use App\Services\Pixelforge\Exceptions\PixelforgeException;
 use App\Services\Pixelforge\Exceptions\RejectedException;
@@ -10,6 +11,7 @@ use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Validator;
 use InvalidArgumentException;
 
 /**
@@ -72,7 +74,8 @@ class PixelforgeClient
         return $this->send(
             $this->request()
                 ->withHeaders(['Idempotency-Key' => $idempotencyKey])
-                ->post('/generations', $payload)
+                ->post('/generations', $payload),
+            ['id' => ['required', 'string']]
         );
     }
 
@@ -81,7 +84,9 @@ class PixelforgeClient
      */
     public function getGeneration(string $id): array
     {
-        return $this->send($this->request()->get('/generations/'.urlencode($id)));
+        return $this->send($this->request()->get('/generations/'.urlencode($id)), [
+            'id' => ['required', 'string'],
+        ]);
     }
 
     /**
@@ -118,7 +123,28 @@ class PixelforgeClient
      */
     public function pricing(): array
     {
-        return $this->send($this->request()->get('/pricing'));
+        $rules = [
+            'rates' => ['required', 'array'],
+            'tokens.characters_per_text_token' => ['required', 'integer', 'min:1'],
+            'tokens.text_token_variance' => ['required', 'numeric', 'min:0'],
+            'tokens.per_reference_image' => ['required', 'integer', 'min:0'],
+        ];
+
+        foreach (['input_text_tokens', 'input_image_tokens', 'output_tokens', 'reasoning_tokens'] as $type) {
+            $rules["rates.{$type}"] = ['required', 'regex:/^\d+(?:\.\d+)?$/D'];
+        }
+
+        foreach (GenerationService::QUALITIES as $quality) {
+            foreach (GenerationService::SIZES as $size) {
+                $rules["tokens.output.{$quality}.{$size}"] = ['required', 'integer', 'min:0'];
+            }
+
+            foreach (['min', 'max'] as $bound) {
+                $rules["tokens.reasoning.{$quality}.{$bound}"] = ['required', 'integer', 'min:0'];
+            }
+        }
+
+        return $this->send($this->request()->get('/pricing'), $rules);
     }
 
     private function request(): PendingRequest
@@ -132,9 +158,10 @@ class PixelforgeClient
     }
 
     /**
+     * @param  array<string, list<string>>  $rules
      * @return array<string, mixed>
      */
-    private function send(Response $response): array
+    private function send(Response $response, array $rules = []): array
     {
         $remaining = $response->header('X-RateLimit-Remaining');
 
@@ -147,7 +174,13 @@ class PixelforgeClient
         }
 
         if ($response->successful()) {
-            return $response->json() ?? [];
+            $data = $response->json();
+
+            if (! is_array($data) || Validator::make($data, $rules)->fails()) {
+                throw new PixelforgeException('Pixelforge returned an invalid success response.', status: $response->status());
+            }
+
+            return $data;
         }
 
         throw $this->exceptionFor($response);
@@ -181,7 +214,7 @@ class PixelforgeClient
             );
         }
 
-        if ($status >= 400 && $status < 500) {
+        if ($status >= 400 && $status < 500 && $status !== 408) {
             return new RejectedException($message, $errorCode, $type, $status, $errors);
         }
 

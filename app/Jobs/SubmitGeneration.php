@@ -42,12 +42,6 @@ class SubmitGeneration implements ShouldQueue
      */
     private const BACKOFF_SECONDS = [10, 30, 120, 600, 1800];
 
-    /**
-     * Whether this worker actually attempted the provider call. It decides whether a
-     * final idempotent replay is useful when the job is marked failed by the queue.
-     */
-    private bool $createAttempted = false;
-
     public function __construct(public readonly string $generationId) {}
 
     /**
@@ -82,7 +76,10 @@ class SubmitGeneration implements ShouldQueue
             return;
         }
 
-        $this->createAttempted = true;
+        // The queue restores the original job payload before calling failed().
+        if ($generation->submission_attempted_at === null) {
+            $generation->forceFill(['submission_attempted_at' => now()])->save();
+        }
 
         try {
             $object = $client->createGeneration(
@@ -176,7 +173,7 @@ class SubmitGeneration implements ShouldQueue
         // may have accepted the generation even though we never saw the 202. Replaying the
         // same idempotency key is safe and either returns the existing generation or
         // creates the one that never reached us.
-        if ($this->createAttempted) {
+        if ($generation->submission_attempted_at !== null) {
             $replayed = $this->replaySubmit($generation);
 
             if ($replayed) {
@@ -186,7 +183,7 @@ class SubmitGeneration implements ShouldQueue
 
         app(GenerationWriter::class)->failLocal(
             $generation,
-            $e instanceof PixelforgeException ? ($e->errorCode ?? 'submit_failed') : 'submit_failed',
+            $generation->submission_attempted_at === null ? 'submit_not_attempted' : 'submit_failed',
             $e?->getMessage() ?? 'The generation could not be submitted after several attempts.',
         );
     }
@@ -229,6 +226,12 @@ class SubmitGeneration implements ShouldQueue
 
             return true;
         } catch (ConnectionException|PixelforgeException $e) {
+            if ($e instanceof RetryableException && ! $e->isRetryable()) {
+                app(GenerationWriter::class)->failLocal($generation, $e->errorCode ?? 'daily_limit_exceeded', $e->getMessage());
+
+                return true;
+            }
+
             Log::warning('pixelforge.submit_final_replay_failed', [
                 'generation_id' => $generation->id,
                 'message' => $e->getMessage(),

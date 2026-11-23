@@ -48,6 +48,7 @@ class StoreGenerationRequest extends FormRequest
     {
         return [
             // Docs: at most 4,000 characters. Unicode characters, not bytes.
+            'quoted_max' => ['required', 'string', 'regex:/^-?\d+\.\d{9}$/D', 'max:24'],
             'prompt' => ['required', 'string', 'max:'.GenerationService::PROMPT_MAX],
             // Docs: exactly these three values; the default is 1024x1024 but the UI always
             // sends an explicit choice.
@@ -65,11 +66,12 @@ class StoreGenerationRequest extends FormRequest
      * Keeping the conversion on the request means the controller never touches raw
      * validated arrays and the service never has to guess which keys are present.
      *
-     * @return array{prompt: string, size: string, quality: string, reference_images: array<int, string>}
+     * @return array{quoted_max: string, prompt: string, size: string, quality: string, reference_images: array<int, string>}
      */
     public function generationData(): array
     {
         return [
+            'quoted_max' => (string) $this->validated('quoted_max'),
             'prompt' => (string) $this->validated('prompt'),
             'size' => (string) $this->validated('size'),
             'quality' => (string) $this->validated('quality'),

@@ -19,7 +19,7 @@ use Illuminate\Support\Facades\Storage;
  * Webhooks, the submit job and the polling reconciler all funnel through here, so the
  * rules below hold no matter which source saw the change first:
  *
- *  1. `succeeded` and `failed` are final. A late event never reopens them.
+ *  1. Terminal states are final except when late success resolves an ambiguous submit.
  *  2. Status only moves forward: pending < queued < processing < succeeded = failed.
  *  3. Cost is recorded exactly once, under the generation row lock, and only on success.
  *
@@ -41,7 +41,7 @@ class GenerationWriter
      */
     public function apply(Generation $generation, array $object): Generation
     {
-        $fresh = DB::transaction(function () use ($generation, $object): Generation {
+        [$fresh, $settled] = DB::transaction(function () use ($generation, $object): array {
             $locked = Generation::query()
                 ->whereKey($generation->getKey())
                 ->lockForUpdate()
@@ -57,13 +57,13 @@ class GenerationWriter
                 && $locked->error_code === 'submit_failed';
 
             if ($locked->isTerminal() && ! ($ambiguousSubmit && $incoming === Generation::STATUS_SUCCEEDED)) {
-                return $locked;
+                return [$locked, false];
             }
 
             // Status is a one-way ladder. A retried `generation.processing` arriving after
             // `generation.succeeded` has a lower rank and is ignored.
             if (Generation::rank($incoming) < Generation::rank($locked->status)) {
-                return $locked;
+                return [$locked, false];
             }
 
             $locked->status = $incoming;
@@ -95,14 +95,14 @@ class GenerationWriter
                 $locked->save();
             }
 
-            return $locked;
+            return [$locked, $incoming === Generation::STATUS_SUCCEEDED];
         });
 
         // Pixelforge image URLs die after 24h. Store a local copy after the money is
         // already safe, so a slow or failed download never blocks settlement or the
         // webhook worker. The job is unique per generation, so a poller/webhook race
         // cannot download the same image twice.
-        if ($fresh->isSucceeded() && $fresh->stored_image_path === null) {
+        if ($settled && $fresh->image_url !== null && $fresh->stored_image_path === null) {
             StoreGenerationImage::dispatch($fresh->id);
         }
 
@@ -168,33 +168,28 @@ class GenerationWriter
         $providerCostNano = PricingService::costOfUsage($usage, $rates);
         $chargedNano = Money::withMarkup($providerCostNano, (int) config('services.pixelforge.markup_percent'));
 
-        // The quote is the promise shown to the user. Rates are fixed per generation, but
-        // a stale pricing cache can mean the snapshot was computed with older rates. When
-        // the markup would exceed that promise, cap the charge at the quote — but never
-        // below the provider cost, because that would turn a rare rate change into a loss.
-        if ($chargedNano > $locked->estimated_charged_nano) {
-            if ($locked->estimated_charged_nano >= $providerCostNano) {
-                Log::warning('pixelforge.charge_capped_to_estimate', [
-                    'generation_id' => $locked->id,
-                    'estimated_charged_nano' => $locked->estimated_charged_nano,
-                    'uncapped_charged_nano' => $chargedNano,
-                ]);
+        $cap = max($locked->estimated_charged_nano, $providerCostNano);
+        $charged = min(max($chargedNano, $providerCostNano), $cap);
 
-                $chargedNano = $locked->estimated_charged_nano;
-            } else {
-                Log::warning('pixelforge.charge_exceeded_estimate', [
-                    'generation_id' => $locked->id,
-                    'estimated_charged_nano' => $locked->estimated_charged_nano,
-                    'provider_cost_nano' => $providerCostNano,
-                    'charged_nano' => $chargedNano,
-                ]);
-            }
+        if ($providerCostNano > $locked->estimated_charged_nano) {
+            Log::warning('pixelforge.charge_exceeded_estimate', [
+                'generation_id' => $locked->id,
+                'estimated_charged_nano' => $locked->estimated_charged_nano,
+                'provider_cost_nano' => $providerCostNano,
+                'charged_nano' => $charged,
+            ]);
+        } elseif ($chargedNano > $cap) {
+            Log::warning('pixelforge.charge_capped_to_estimate', [
+                'generation_id' => $locked->id,
+                'estimated_charged_nano' => $locked->estimated_charged_nano,
+                'uncapped_charged_nano' => $chargedNano,
+            ]);
         }
 
         $locked->status = Generation::STATUS_SUCCEEDED;
         $locked->usage = $usage;
         $locked->provider_cost_nano = $providerCostNano;
-        $locked->charged_nano = $chargedNano;
+        $locked->charged_nano = $charged;
         $locked->image_url = $object['image_url'] ?? null;
         $locked->image_url_expires_at = ! empty($object['image_url_expires_at'])
             ? CarbonImmutable::parse($object['image_url_expires_at'])
@@ -261,13 +256,19 @@ class GenerationWriter
             );
         }
 
+        $body = $response->body();
+
+        if (! str_starts_with($body, "\x89PNG\r\n\x1a\n")) {
+            throw new \RuntimeException('The generated image response is not a PNG.');
+        }
+
         $disk = Storage::disk((string) config('filesystems.image_disk', 'public'));
         $path = "generations/{$generation->id}.png";
 
         // `throw` is disabled on the disks, so `put()` reports failure as `false`. A false
         // result must fail the job; writing the path would make the UI prefer a missing
         // file over Pixelforge's still-valid URL.
-        if (! $disk->put($path, $response->body())) {
+        if (! $disk->put($path, $body)) {
             throw new \RuntimeException('The generated image could not be written to the image disk.');
         }
 

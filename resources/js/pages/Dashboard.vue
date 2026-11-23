@@ -46,6 +46,7 @@ const form = useForm({
     size: '1024x1024',
     quality: 'medium',
     reference_images: [''] as string[],
+    quoted_max: '',
 });
 
 const quote = ref<Estimate | null>(null);
@@ -55,12 +56,18 @@ const quoteError = ref<string | null>(null);
 let quoteTimer: number | undefined;
 let quoteController: AbortController | null = null;
 let quoteRequestId = 0;
+let quoteReferenceError: string | undefined;
+const QUOTE_TIMEOUT_MS = 10000;
+
+type GenerationFlash = {
+    status?: string | null;
+    error?: string | null;
+    updated_quote?: Estimate | null;
+};
 
 /** Server feedback: queued confirmation, or "pricing unavailable, nothing submitted". */
 const page = usePage();
-const flash = computed(
-    () => page.props.flash as { status?: string | null; error?: string | null },
-);
+const flash = computed(() => page.props.flash as GenerationFlash);
 
 /** Blanks are not reference images and must not count towards the 765-token charge. */
 const references = computed(() =>
@@ -95,6 +102,17 @@ function xsrfToken(): string {
     return match ? decodeURIComponent(match[1]) : '';
 }
 
+function clearQuoteReferenceError(): void {
+    if (
+        quoteReferenceError !== undefined &&
+        form.errors.reference_images === quoteReferenceError
+    ) {
+        form.clearErrors('reference_images');
+    }
+
+    quoteReferenceError = undefined;
+}
+
 /**
  * Fetch the live quote with a 300 ms debounce. POST keeps a 4,000-character prompt out
  * of the URL. Wayfinder builds the endpoint, so the route stays in sync with the backend.
@@ -107,7 +125,15 @@ async function refreshQuote(): Promise<void> {
     const requestId = ++quoteRequestId;
 
     quoteController?.abort();
-    quoteController = new AbortController();
+    const controller = new AbortController();
+    quoteController = controller;
+    const deadline = window.setTimeout(
+        () => controller.abort(),
+        QUOTE_TIMEOUT_MS,
+    );
+    clearQuoteReferenceError();
+    quote.value = null;
+    quotedSignature.value = null;
     quoting.value = true;
     quoteError.value = null;
 
@@ -122,9 +148,36 @@ async function refreshQuote(): Promise<void> {
                 'X-XSRF-TOKEN': xsrfToken(),
             },
             credentials: 'same-origin',
-            signal: quoteController.signal,
+            signal: controller.signal,
             body: JSON.stringify(payload),
         });
+
+        if (response.status === 422) {
+            const { errors } = (await response.json()) as {
+                errors?: Record<string, string[]>;
+            };
+
+            if (requestId !== quoteRequestId) {
+                return;
+            }
+
+            const messages = Object.entries(errors ?? {})
+                .filter(
+                    ([key]) =>
+                        key === 'reference_images' ||
+                        key.startsWith('reference_images.'),
+                )
+                .flatMap(([, messages]) => messages);
+
+            if (messages.length > 0) {
+                quoteReferenceError = messages.join(' ');
+                form.setError('reference_images', quoteReferenceError);
+                quoteError.value =
+                    'Correct the reference images to get an estimate.';
+
+                return;
+            }
+        }
 
         if (!response.ok) {
             throw new Error(`Estimate failed (${response.status})`);
@@ -139,11 +192,7 @@ async function refreshQuote(): Promise<void> {
 
         quote.value = data.estimate;
         quotedSignature.value = signature;
-    } catch (error) {
-        if ((error as Error).name === 'AbortError') {
-            return;
-        }
-
+    } catch {
         if (requestId !== quoteRequestId) {
             return;
         }
@@ -152,6 +201,7 @@ async function refreshQuote(): Promise<void> {
         quote.value = null;
         quotedSignature.value = null;
     } finally {
+        window.clearTimeout(deadline);
         // Only the active request owns the loading flag; an aborted older request must
         // not clear the spinner of the request that replaced it.
         if (requestId === quoteRequestId) {
@@ -172,6 +222,7 @@ watch(
         quoteRequestId++;
         quoteController?.abort();
         quoteController = null;
+        clearQuoteReferenceError();
         quote.value = null;
         quotedSignature.value = null;
         quoteError.value = null;
@@ -184,6 +235,7 @@ watch(
 );
 
 onBeforeUnmount(() => {
+    quoteRequestId++;
     window.clearTimeout(quoteTimer);
     quoteController?.abort();
 });
@@ -193,9 +245,18 @@ onBeforeUnmount(() => {
  * the POST body identical to what the quote counted.
  */
 function submit(): void {
-    if (form.processing || quoting.value || !quoteMatchesInputs.value) {
+    if (
+        form.processing ||
+        quoting.value ||
+        !quoteMatchesInputs.value ||
+        !quote.value
+    ) {
         return;
     }
+
+    const submittedSignature = quoteSignature.value;
+    const submittedReferences = [...form.reference_images];
+    form.quoted_max = quote.value.charged.max;
 
     form.transform((data) => ({
         ...data,
@@ -206,16 +267,41 @@ function submit(): void {
 
     form.post(storeRoute.url(), {
         preserveScroll: true,
+        onBefore: () => {
+            poll.stop();
+            cancelPoll?.();
+        },
         onSuccess: (page) => {
-            const flashError = (
-                page.props.flash as { error?: string | null } | undefined
-            )?.error;
+            const feedback = page.props.flash as GenerationFlash | undefined;
+            const sameDraft =
+                quoteSignature.value === submittedSignature &&
+                form.reference_images.length === submittedReferences.length &&
+                form.reference_images.every(
+                    (url, index) => url === submittedReferences[index],
+                );
 
-            // Pricing failures redirect back with a flash error. Keep the prompt and
-            // references so the user can retry instead of retyping them.
-            if (!flashError) {
-                form.reset('prompt', 'reference_images');
+            if (feedback?.error) {
+                if (
+                    feedback.updated_quote &&
+                    quoteSignature.value === submittedSignature
+                ) {
+                    quoteRequestId++;
+                    quoteController?.abort();
+                    window.clearTimeout(quoteTimer);
+                    clearQuoteReferenceError();
+                    quoteError.value = null;
+                    quoting.value = false;
+                    quote.value = feedback.updated_quote;
+                    quotedSignature.value = submittedSignature;
+                }
+            } else if (sameDraft) {
+                form.prompt = '';
                 form.reference_images = [''];
+            }
+        },
+        onFinish: () => {
+            if (hasActive.value) {
+                poll.start();
             }
         },
     });
@@ -226,16 +312,27 @@ const hasActive = computed(() =>
     props.generations.some((generation) => generation.is_active),
 );
 
+let cancelPoll: (() => void) | undefined;
+
 const poll = usePoll(
     3000,
-    { only: ['generations'] },
+    {
+        only: ['generations'],
+        onBefore: () => !form.processing,
+        onCancelToken: (token) => {
+            cancelPoll = () => token.cancel();
+        },
+        onFinish: () => {
+            cancelPoll = undefined;
+        },
+    },
     { mode: 'rest', background: 'pause', autoStart: false },
 );
 
 watch(
     hasActive,
     (active) => {
-        if (active) {
+        if (active && !form.processing) {
             poll.start();
         } else {
             poll.stop();
@@ -291,9 +388,12 @@ watch(
 
                         <div class="grid gap-4 sm:grid-cols-2">
                             <div class="grid gap-2">
-                                <Label>Size</Label>
+                                <Label id="generation-size-label">Size</Label>
                                 <Select v-model="form.size">
-                                    <SelectTrigger class="w-full">
+                                    <SelectTrigger
+                                        class="w-full"
+                                        aria-labelledby="generation-size-label"
+                                    >
                                         <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -310,9 +410,14 @@ watch(
                             </div>
 
                             <div class="grid gap-2">
-                                <Label>Quality</Label>
+                                <Label id="generation-quality-label"
+                                    >Quality</Label
+                                >
                                 <Select v-model="form.quality">
-                                    <SelectTrigger class="w-full">
+                                    <SelectTrigger
+                                        class="w-full"
+                                        aria-labelledby="generation-quality-label"
+                                    >
                                         <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -357,7 +462,16 @@ watch(
                 </CardHeader>
                 <CardContent class="space-y-4">
                     <div v-if="quoteError" class="text-sm text-destructive">
-                        {{ quoteError }}
+                        <p>{{ quoteError }}</p>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            class="mt-2"
+                            @click="refreshQuote"
+                        >
+                            Retry
+                        </Button>
                     </div>
 
                     <div
@@ -379,7 +493,7 @@ watch(
                             <p
                                 class="text-xs tracking-wide text-muted-foreground uppercase"
                             >
-                                You pay at most
+                                Estimated maximum
                             </p>
                             <p class="text-3xl font-semibold">
                                 {{ quote.charged.max_display }}
@@ -423,9 +537,9 @@ watch(
 
                         <p class="border-t pt-3 text-xs text-muted-foreground">
                             Text and reasoning counts are only known when
-                            Pixelforge finishes. The final price can be lower,
-                            never higher than the amount above. Failed
-                            generations are free.
+                            Pixelforge finishes. The final price can be lower.
+                            If provider cost exceeds the estimate, you pay only
+                            provider cost. Failed generations are free.
                         </p>
                     </template>
                 </CardContent>

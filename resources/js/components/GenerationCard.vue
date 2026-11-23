@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Maximize2 } from '@lucide/vue';
-import { computed, ref } from 'vue';
+import { useResizeObserver } from '@vueuse/core';
+import { computed, ref, watchPostEffect } from 'vue';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -84,15 +85,57 @@ const progressLabel = computed(() => {
     }
 });
 
-/** Only long prompts get the read-more toggle; short ones stay fully visible. */
-const isLongPrompt = computed(
-    () =>
-        props.generation.prompt.length > 240 ||
-        props.generation.prompt.split('\n').length > 3,
-);
+function usePromptPreview(clamp: string, checkContainer = false) {
+    const element = ref<HTMLElement | null>(null);
+    const expanded = ref(false);
+    const truncated = ref(false);
 
-const cardPromptExpanded = ref(false);
-const dialogPromptExpanded = ref(false);
+    function measure(): void {
+        const preview = element.value;
+
+        if (!preview?.clientWidth) {
+            return;
+        }
+
+        // Measure the collapsed layout even while "Show less" is visible.
+        const wasClamped = preview.classList.contains(clamp);
+        preview.classList.add(clamp);
+        truncated.value =
+            preview.scrollHeight > preview.clientHeight ||
+            (checkContainer &&
+                (preview.parentElement?.scrollHeight ?? 0) >
+                    (preview.parentElement?.clientHeight ?? 0));
+
+        if (!wasClamped) {
+            preview.classList.remove(clamp);
+        }
+
+        if (!truncated.value) {
+            expanded.value = false;
+        }
+    }
+
+    watchPostEffect(() => {
+        // These changes can alter the overflow without resizing the clamped box.
+        void props.generation.prompt;
+        void expanded.value;
+        measure();
+    });
+    useResizeObserver(element, measure);
+
+    return { element, expanded, truncated };
+}
+
+const {
+    element: cardPrompt,
+    expanded: cardPromptExpanded,
+    truncated: cardPromptTruncated,
+} = usePromptPreview('line-clamp-2');
+const {
+    element: dialogPrompt,
+    expanded: dialogPromptExpanded,
+    truncated: dialogPromptTruncated,
+} = usePromptPreview('line-clamp-3', true);
 
 const createdAt = computed(() => {
     if (!props.generation.created_at) {
@@ -185,7 +228,7 @@ const costText = computed(() => {
                                     {{ generation.quality }} · {{ createdAt }}
                                 </p>
                                 <Button
-                                    v-if="isLongPrompt"
+                                    v-if="dialogPromptTruncated"
                                     type="button"
                                     variant="link"
                                     size="sm"
@@ -214,6 +257,7 @@ const costText = computed(() => {
                                 "
                             >
                                 <p
+                                    ref="dialogPrompt"
                                     class="text-sm break-words whitespace-pre-wrap"
                                     :class="
                                         dialogPromptExpanded
@@ -262,6 +306,7 @@ const costText = computed(() => {
                         "
                     >
                         <p
+                            ref="cardPrompt"
                             class="text-sm break-words whitespace-pre-wrap"
                             :class="cardPromptExpanded ? '' : 'line-clamp-2'"
                         >
@@ -269,7 +314,7 @@ const costText = computed(() => {
                         </p>
                     </div>
                     <Button
-                        v-if="isLongPrompt"
+                        v-if="cardPromptTruncated"
                         type="button"
                         variant="link"
                         size="sm"

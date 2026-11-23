@@ -34,11 +34,15 @@ class RetryUnprocessedWebhooks extends Command
         $events = WebhookEvent::query()
             ->whereNull('processed_at')
             ->where('received_at', '<=', now()->subMinutes($minutes))
+            ->orderByRaw('last_recovery_attempt_at ASC NULLS FIRST')
             ->orderBy('id')
             ->limit($limit)
             ->get();
 
-        $events->each(fn (WebhookEvent $event) => ProcessWebhookEvent::dispatch($event->id));
+        foreach ($events as $event) {
+            $event->forceFill(['last_recovery_attempt_at' => now()])->save();
+            ProcessWebhookEvent::dispatch($event->id);
+        }
 
         $this->info("Dispatched {$events->count()} unprocessed webhook event(s).");
 

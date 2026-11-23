@@ -27,3 +27,9 @@ Schedule::command('pixelforge:retry-unprocessed-webhooks')
     ->everyFiveMinutes()
     ->withoutOverlapping()
     ->onOneServer();
+
+// A settled row remains recoverable if the image job could not be queued.
+Schedule::command('pixelforge:recover-generation-images')
+    ->everyFiveMinutes()
+    ->withoutOverlapping()
+    ->onOneServer();

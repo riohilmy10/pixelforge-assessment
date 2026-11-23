@@ -32,6 +32,7 @@ use Illuminate\Support\Facades\Storage;
  * @property string|null $error_message
  * @property CarbonImmutable|null $started_at
  * @property CarbonImmutable|null $completed_at
+ * @property CarbonImmutable|null $submission_attempted_at
  * @property CarbonImmutable|null $submitted_at
  * @property CarbonImmutable|null $last_synced_at
  */
@@ -100,6 +101,7 @@ class Generation extends Model
             'image_url_expires_at' => 'datetime',
             'started_at' => 'datetime',
             'completed_at' => 'datetime',
+            'submission_attempted_at' => 'datetime',
             'submitted_at' => 'datetime',
             'last_synced_at' => 'datetime',
         ];

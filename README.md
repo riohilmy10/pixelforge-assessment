@@ -49,6 +49,8 @@ docker run --rm \
   -w /var/www/html \
   composer:2 install --no-interaction --prefer-dist
 
+# Run Sail with the same ownership as your host checkout.
+export WWWUSER="$(id -u)" WWWGROUP="$(id -g)"
 sail up -d
 sail artisan migrate
 sail artisan storage:link

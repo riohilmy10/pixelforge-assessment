@@ -6,6 +6,7 @@ use App\Jobs\SubmitGeneration;
 use App\Models\Generation;
 use App\Models\User;
 use App\Services\GenerationWriter;
+use App\Services\Pixelforge\Exceptions\PixelforgeException;
 use App\Services\Pixelforge\PixelforgeClient;
 use App\Support\Money;
 use Illuminate\Contracts\Queue\Job as QueueJob;
@@ -70,6 +71,7 @@ class GenerationSubmitTest extends TestCase
         $user = User::factory()->create();
 
         $response = $this->actingAs($user)->post(route('generations.store'), [
+            'quoted_max' => '0.467343750',
             'prompt' => str_repeat('a', 400),
             'size' => '1536x1024',
             'quality' => 'high',
@@ -86,6 +88,37 @@ class GenerationSubmitTest extends TestCase
         $this->assertSame(Money::fromDecimal('0.467343750'), $generation->estimated_charged_nano);
         $this->assertNull($generation->charged_nano);
         Queue::assertPushed(SubmitGeneration::class, fn (SubmitGeneration $job) => $job->generationId === $generation->id);
+    }
+
+    public function test_changed_quote_must_be_confirmed_before_queueing(): void
+    {
+        $this->fakePricing();
+        Queue::fake();
+
+        $user = User::factory()->create();
+        $inputs = [
+            'prompt' => 'A lighthouse',
+            'size' => '1024x1024',
+            'quality' => 'medium',
+        ];
+
+        $this->actingAs($user)->post(route('generations.store'), $inputs)
+            ->assertSessionHasErrors('quoted_max');
+
+        $this->from(route('dashboard'))->post(route('generations.store'), $inputs + ['quoted_max' => '0.010000000'])
+            ->assertRedirect(route('dashboard'))
+            ->assertSessionHas('error')
+            ->assertSessionHas('updated_quote.charged.max', '0.086275000');
+
+        $this->assertDatabaseEmpty('generations');
+        Queue::assertNothingPushed();
+
+        $this->post(route('generations.store'), $inputs + ['quoted_max' => '0.086275000'])
+            ->assertRedirect(route('dashboard'))
+            ->assertSessionHas('status');
+
+        $this->assertSame(86_275_000, Generation::query()->sole()->estimated_charged_nano);
+        Queue::assertPushed(SubmitGeneration::class, 1);
     }
 
     public function test_store_validation_rejects_inputs_the_provider_would_reject(): void
@@ -135,6 +168,7 @@ class GenerationSubmitTest extends TestCase
         $this->actingAs($user)
             ->from(route('dashboard'))
             ->post(route('generations.store'), [
+                'quoted_max' => '0.086281250',
                 'prompt' => 'A lighthouse',
                 'size' => '1024x1024',
                 'quality' => 'medium',
@@ -169,6 +203,7 @@ class GenerationSubmitTest extends TestCase
         });
 
         $job = new SubmitGeneration($generation->id);
+        $originalPayload = serialize($job);
 
         try {
             $job->handle(app(PixelforgeClient::class), app(GenerationWriter::class));
@@ -177,7 +212,7 @@ class GenerationSubmitTest extends TestCase
             // The worker calls failed() after this exception.
         }
 
-        $job->failed(new ConnectionException('Connection reset'));
+        unserialize($originalPayload)->failed(new ConnectionException('Connection reset'));
 
         $generation->refresh();
 
@@ -186,6 +221,33 @@ class GenerationSubmitTest extends TestCase
         $this->assertNull($generation->error_code);
 
         Http::assertSent(fn ($request): bool => $request->header('Idempotency-Key')[0] === $generation->idempotency_key);
+    }
+
+    public function test_ambiguous_provider_error_with_a_code_accepts_late_success(): void
+    {
+        Queue::fake();
+        $generation = $this->createGeneration(User::factory()->create());
+        Http::fake(['*/generations' => Http::response([
+            'error' => ['code' => 'upstream_error', 'message' => 'Upstream response timed out.'],
+        ], 500)]);
+
+        $job = new SubmitGeneration($generation->id);
+        $originalPayload = serialize($job);
+
+        try {
+            $job->handle(app(PixelforgeClient::class), app(GenerationWriter::class));
+            $this->fail('Expected a provider error.');
+        } catch (PixelforgeException $e) {
+            unserialize($originalPayload)->failed($e);
+        }
+
+        Http::assertSentCount(2);
+        $this->assertSame('submit_failed', $generation->fresh()->error_code);
+        $this->assertSame('Upstream response timed out.', $generation->fresh()->error_message);
+
+        app(GenerationWriter::class)->apply($generation, $this->succeededObject($generation->id));
+
+        $this->assertTrue($generation->fresh()->isSucceeded());
     }
 
     public function test_pricing_transport_failure_is_reported_as_unavailable(): void
@@ -203,6 +265,7 @@ class GenerationSubmitTest extends TestCase
         $this->actingAs($user)
             ->from(route('dashboard'))
             ->post(route('generations.store'), [
+                'quoted_max' => '0.086281250',
                 'prompt' => 'A lighthouse',
                 'size' => '1024x1024',
                 'quality' => 'medium',
@@ -250,6 +313,7 @@ class GenerationSubmitTest extends TestCase
 
     public function test_policy_rejection_fails_the_generation_without_a_cost(): void
     {
+        Queue::fake();
         $user = User::factory()->create();
         $generation = $this->createGeneration($user);
 
@@ -266,6 +330,7 @@ class GenerationSubmitTest extends TestCase
         $job = new SubmitGeneration($generation->id);
         $job->handle(app(PixelforgeClient::class), app(GenerationWriter::class));
 
+        app(GenerationWriter::class)->apply($generation, $this->succeededObject($generation->id));
         $generation->refresh();
 
         $this->assertSame(Generation::STATUS_FAILED, $generation->status);
@@ -353,8 +418,9 @@ class GenerationSubmitTest extends TestCase
         $this->assertSame('idempotency_key_reused', $generation->error_code);
     }
 
-    public function test_exhausted_job_marks_the_row_failed(): void
+    public function test_exhausted_job_that_never_submitted_does_not_replay(): void
     {
+        Http::fake();
         $user = User::factory()->create();
         $generation = $this->createGeneration($user);
 
@@ -363,7 +429,8 @@ class GenerationSubmitTest extends TestCase
         $generation->refresh();
 
         $this->assertSame(Generation::STATUS_FAILED, $generation->status);
-        $this->assertSame('submit_failed', $generation->error_code);
+        Http::assertNothingSent();
+        $this->assertSame('submit_not_attempted', $generation->error_code);
         $this->assertNull($generation->charged_nano);
     }
 }

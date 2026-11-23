@@ -65,6 +65,22 @@ class PixelforgeClientTest extends TestCase
         $this->assertSame('queued', $generation['status']);
     }
 
+    public function test_successful_create_without_provider_id_throws_a_provider_exception(): void
+    {
+        Http::fake(['*' => Http::response(['status' => 'queued'], 202)]);
+
+        $this->expectException(PixelforgeException::class);
+        $this->client()->createGeneration('key', 'prompt', '1024x1024', 'medium');
+    }
+
+    public function test_successful_pricing_without_rates_throws_a_provider_exception(): void
+    {
+        Http::fake(['*' => Http::response(['object' => 'pricing'], 200)]);
+
+        $this->expectException(PixelforgeException::class);
+        $this->client()->pricing();
+    }
+
     public function test_rate_limit_exposes_retry_after(): void
     {
         Http::fake(['*' => $this->error('rate_limit_exceeded', 'rate_limit_error', 429, [], ['Retry-After' => '17'])]);

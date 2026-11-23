@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import GenerationCard from '@/components/GenerationCard.vue';
 import type { Generation } from '@/types';
 
@@ -26,7 +26,29 @@ function generation(overrides: Partial<Generation> = {}): Generation {
     };
 }
 
+// happy-dom has no layout engine. Model a prompt that wraps beyond the clamp.
+function mockPromptLayout({
+    card,
+    dialog,
+}: {
+    card: boolean;
+    dialog: boolean;
+}) {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(180);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(60);
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(
+        function (this: HTMLElement) {
+            const overflows =
+                (card && this.classList.contains('line-clamp-2')) ||
+                (dialog && this.classList.contains('line-clamp-3'));
+
+            return overflows ? 100 : 60;
+        },
+    );
+}
+
 afterEach(() => {
+    vi.restoreAllMocks();
     document.body.innerHTML = '';
 });
 
@@ -123,6 +145,7 @@ describe('GenerationCard', () => {
     });
 
     it('collapses long prompts behind Read more without resizing the image', async () => {
+        mockPromptLayout({ card: false, dialog: true });
         const longPrompt = 'A lighthouse on a cliff at dawn. '.repeat(20);
 
         const wrapper = mount(GenerationCard, {
@@ -166,7 +189,8 @@ describe('GenerationCard', () => {
         wrapper.unmount();
     });
 
-    it('does not show Read more for a short prompt', async () => {
+    it('hides Read more when the full prompt fits', async () => {
+        mockPromptLayout({ card: false, dialog: false });
         const wrapper = mount(GenerationCard, {
             props: {
                 generation: generation({
@@ -191,19 +215,22 @@ describe('GenerationCard', () => {
         wrapper.unmount();
     });
 
-    it('expands a long prompt on the card without opening the image dialog', async () => {
+    it('expands a short prompt that wraps on a failed card without a dialog', async () => {
+        mockPromptLayout({ card: true, dialog: false });
         const wrapper = mount(GenerationCard, {
             props: {
                 generation: generation({
                     status: 'failed',
                     is_active: false,
                     is_terminal: true,
-                    prompt: 'A lighthouse on a cliff at dawn. '.repeat(20),
+                    prompt: 'A lighthouse on a cliff at dawn.',
                     image_url: null,
                     error_message: 'The model could not produce an image.',
                 }),
             },
         });
+
+        await flushPromises();
 
         const readMore = wrapper
             .findAll('button')

@@ -3,12 +3,14 @@
 namespace App\Services;
 
 use App\Exceptions\PricingUnavailableException;
+use App\Exceptions\QuoteChangedException;
 use App\Jobs\SubmitGeneration;
 use App\Models\Generation;
 use App\Models\User;
 use App\Services\Pixelforge\Exceptions\PixelforgeException;
 use App\Services\Pixelforge\GenerationEstimate;
 use App\Services\Pixelforge\PricingService;
+use App\Support\Money;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
@@ -100,7 +102,7 @@ class GenerationService
      * so every retry of the job replays the same provider request instead of creating a
      * second billable generation.
      *
-     * @param  array{prompt: string, size: string, quality: string, reference_images?: array<int, string>}  $data
+     * @param  array{quoted_max: string, prompt: string, size: string, quality: string, reference_images?: array<int, string>}  $data
      */
     public function submit(User $user, array $data): Generation
     {
@@ -112,6 +114,10 @@ class GenerationService
             quality: $data['quality'],
             referenceImages: count($references),
         );
+
+        if ($data['quoted_max'] !== Money::toDecimal($estimate->maxChargedNano)) {
+            throw new QuoteChangedException($estimate);
+        }
 
         // The row and its queue job are one unit of work: if enqueueing fails, the user
         // must not be left with a pending generation that no worker will ever see. With
