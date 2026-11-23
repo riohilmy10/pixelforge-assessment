@@ -1,4 +1,4 @@
-import { flushPromises, mount } from '@vue/test-utils';
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import GenerationCard from '@/components/GenerationCard.vue';
 import type { Generation } from '@/types';
@@ -51,6 +51,10 @@ afterEach(() => {
     vi.restoreAllMocks();
     document.body.innerHTML = '';
 });
+
+// Register after the cleanup hook: Vitest runs afterEach hooks in reverse order, so the
+// wrappers are unmounted before the body is cleared even when an assertion fails.
+enableAutoUnmount(afterEach);
 
 describe('GenerationCard', () => {
     it('shows the stage label and percentage for each active status', () => {
