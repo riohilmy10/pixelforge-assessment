@@ -191,12 +191,15 @@ class SubmitGeneration implements ShouldQueue
     /**
      * One final idempotent attempt when the queue gives up on an ambiguous error.
      *
+     * Public because the scheduled reconciliation command replays the same key for rows
+     * that outlived the queue's retry window.
+     *
      * Returns true when the provider answered and the generation was applied or failed
      * for a definitive reason. Returns false when the provider is still unreachable, in
      * which case the caller records a retryable `submit_failed` state that a late
      * success webhook is still allowed to settle.
      */
-    private function replaySubmit(Generation $generation): bool
+    public function replaySubmit(Generation $generation): bool
     {
         try {
             $object = app(PixelforgeClient::class)->createGeneration(

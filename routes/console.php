@@ -33,3 +33,10 @@ Schedule::command('pixelforge:recover-generation-images')
     ->everyFiveMinutes()
     ->withoutOverlapping()
     ->onOneServer();
+
+// A lost response can hide a provider-accepted generation. Replay the idempotency key
+// until the row is resolved instead of leaving it in provisional `submit_failed`.
+Schedule::command('pixelforge:reconcile-ambiguous-submissions')
+    ->everyFiveMinutes()
+    ->withoutOverlapping()
+    ->onOneServer();

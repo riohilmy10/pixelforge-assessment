@@ -49,21 +49,35 @@ class GenerationWriter
 
             $incoming = (string) ($object['status'] ?? $locked->status);
 
-            // Terminal states are final, with one deliberate exception: a generation that
-            // we marked `submit_failed` may still have been accepted by Pixelforge when
-            // the connection broke. A late success is allowed to settle it (the user is
-            // then charged correctly); every other terminal state stays closed.
+            // `submit_failed` is provisional: the provider may have accepted the POST even
+            // if every response was lost. A reconciliation or late webhook may therefore
+            // reopen the row to queued/processing, settle it, or record a definitive
+            // provider failure. Every other terminal state stays closed.
             $ambiguousSubmit = $locked->status === Generation::STATUS_FAILED
                 && $locked->error_code === 'submit_failed';
 
-            if ($locked->isTerminal() && ! ($ambiguousSubmit && $incoming === Generation::STATUS_SUCCEEDED)) {
+            $reopens = $ambiguousSubmit && in_array($incoming, [
+                Generation::STATUS_QUEUED,
+                Generation::STATUS_PROCESSING,
+                Generation::STATUS_SUCCEEDED,
+                Generation::STATUS_FAILED,
+            ], true);
+
+            if ($locked->isTerminal() && ! $reopens) {
                 return [$locked, false];
             }
 
             // Status is a one-way ladder. A retried `generation.processing` arriving after
-            // `generation.succeeded` has a lower rank and is ignored.
-            if (Generation::rank($incoming) < Generation::rank($locked->status)) {
+            // `generation.succeeded` has a lower rank and is ignored. Reopening an
+            // ambiguous submission is the only exception.
+            if (! $reopens && Generation::rank($incoming) < Generation::rank($locked->status)) {
                 return [$locked, false];
+            }
+
+            if ($reopens) {
+                $locked->error_code = null;
+                $locked->error_message = null;
+                $locked->completed_at = null;
             }
 
             $locked->status = $incoming;
@@ -125,8 +139,14 @@ class GenerationWriter
                 ->firstOrFail();
 
             // If a webhook already settled it while we were retrying, that terminal state
-            // wins and this late local failure is discarded.
-            if ($locked->isTerminal()) {
+            // wins and this late local failure is discarded. The one exception is a
+            // provisional `submit_failed` that a reconciliation has now resolved to a
+            // definitive rejection/conflict.
+            $resolvesAmbiguous = $locked->status === Generation::STATUS_FAILED
+                && $locked->error_code === 'submit_failed'
+                && $errorCode !== 'submit_failed';
+
+            if ($locked->isTerminal() && ! $resolvesAmbiguous) {
                 return $locked;
             }
 

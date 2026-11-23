@@ -12,9 +12,23 @@ import { defineConfig } from 'vite-plus';
 export default defineConfig({
     plugins: [vue()],
     resolve: {
-        alias: {
-            '@': fileURLToPath(new URL('./resources/js', import.meta.url)),
-        },
+        alias: [
+            {
+                find: /^@\/routes\/generations$/,
+                replacement: fileURLToPath(
+                    new URL(
+                        './resources/js/test/stubs/routes-generations.ts',
+                        import.meta.url,
+                    ),
+                ),
+            },
+            {
+                find: '@',
+                replacement: fileURLToPath(
+                    new URL('./resources/js', import.meta.url),
+                ),
+            },
+        ],
     },
     test: {
         environment: 'happy-dom',
