@@ -112,7 +112,14 @@ class PixelforgeClient
         return $this->send($this->request()->get('/usage', [
             'start_date' => $startDate,
             'end_date' => $endDate,
-        ]));
+        ]), [
+            // `present` allows an empty array: a range with no usage is a valid zero,
+            // not a missing payload. Each row must still carry the financial fields so a
+            // malformed row cannot be silently treated as a zero-cost reconciliation.
+            'data' => ['present', 'array'],
+            'data.*.date' => ['required', 'date_format:Y-m-d'],
+            'data.*.cost_usd' => ['required', 'regex:/^\d+(?:\.\d+)?$/D'],
+        ]);
     }
 
     /**

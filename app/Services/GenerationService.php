@@ -42,7 +42,10 @@ class GenerationService
 
     public const REFERENCE_IMAGES_MAX = 4;
 
-    public function __construct(private readonly PricingService $pricing) {}
+    public function __construct(
+        private readonly PricingService $pricing,
+        private readonly CreditService $credits,
+    ) {}
 
     /**
      * Data for the dashboard: the generator options plus the latest generations.
@@ -57,6 +60,7 @@ class GenerationService
         return [
             'generations' => $this->recentGenerations($user),
             'options' => $this->options(),
+            'balance' => $this->credits->summary($user),
         ];
     }
 
@@ -124,8 +128,18 @@ class GenerationService
         // the database queue both inserts commit together; the worker cannot see the job
         // before the row is visible either.
         return DB::transaction(function () use ($user, $data, $references, $estimate): Generation {
+            // Take the user lock before inserting the generation. The insert takes a
+            // FOR KEY SHARE lock on the user through the foreign key; if two submits did
+            // that first and then both tried to upgrade to FOR UPDATE in reserve(), they
+            // could deadlock. Serialising on the user row makes the second request wait
+            // before it inserts anything.
+            $lockedUser = User::query()
+                ->whereKey($user->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
             $generation = Generation::query()->create([
-                'user_id' => $user->id,
+                'user_id' => $lockedUser->id,
                 'idempotency_key' => (string) Str::uuid(),
                 'status' => Generation::STATUS_PENDING,
                 'prompt' => $data['prompt'],
@@ -137,6 +151,11 @@ class GenerationService
                 'estimated_provider_cost_nano' => $estimate->maxProviderCostNano,
                 'estimated_charged_nano' => $estimate->maxChargedNano,
             ]);
+
+            // Hold the same worst case against the user's balance. The reservation locks
+            // the user row, so concurrent submits cannot both pass the affordability
+            // check; a refusal rolls this transaction (and the new row) back.
+            $this->credits->reserve($lockedUser, $generation, $estimate->maxChargedNano);
 
             SubmitGeneration::dispatch($generation->id);
 

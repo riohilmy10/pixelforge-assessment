@@ -17,17 +17,18 @@ use Illuminate\Console\Command;
  */
 class ReconcileAmbiguousSubmissions extends Command
 {
-    protected $signature = 'pixelforge:reconcile-ambiguous-submissions {--minutes=5} {--limit=50}';
+    protected $signature = 'pixelforge:reconcile-ambiguous-submissions {--minutes=5} {--limit=50} {--max-age-hours=24}';
 
-    protected $description = 'Replay ambiguous Pixelforge submissions until they are resolved';
+    protected $description = 'Replay recent ambiguous Pixelforge submissions until they are resolved';
 
     public function handle(): int
     {
         $minutes = filter_var($this->option('minutes'), FILTER_VALIDATE_INT);
         $limit = filter_var($this->option('limit'), FILTER_VALIDATE_INT);
+        $maxAgeHours = filter_var($this->option('max-age-hours'), FILTER_VALIDATE_INT);
 
-        if ($minutes === false || $minutes < 1 || $limit === false || $limit < 1) {
-            $this->error('--minutes and --limit must be positive integers.');
+        if ($minutes === false || $minutes < 1 || $limit === false || $limit < 1 || $maxAgeHours === false || $maxAgeHours < 1) {
+            $this->error('--minutes, --limit and --max-age-hours must be positive integers.');
 
             return self::FAILURE;
         }
@@ -36,6 +37,7 @@ class ReconcileAmbiguousSubmissions extends Command
             ->where('status', Generation::STATUS_FAILED)
             ->where('error_code', 'submit_failed')
             ->whereNotNull('submission_attempted_at')
+            ->where('submission_attempted_at', '>=', now()->subHours($maxAgeHours))
             ->where(fn ($query) => $query
                 ->whereNull('submission_recovery_attempted_at')
                 ->orWhere('submission_recovery_attempted_at', '<=', now()->subMinutes($minutes)))

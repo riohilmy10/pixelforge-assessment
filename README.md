@@ -10,9 +10,15 @@ the exact cost of every finished generation.
 - See a live quote before submitting. Pixelforge only reveals text and reasoning token counts
   when a generation finishes, so the quote is a range: a typical figure and a worst case.
 - Follow status live (`queued`, `processing`, `succeeded`, `failed`) and see the image.
+- Hold credits, buy more with a simulated top-up, and see every movement in a ledger. The
+  worst-case quote is reserved while a generation runs, so concurrent generations cannot spend
+  the same credits.
 - Every succeeded generation records both the provider cost and the user price (provider cost +
   25%). Failed generations cost nothing, and duplicate or out-of-order webhooks cannot
-  double-charge.
+  double-charge. The user debit is capped at the held quote; a rare rate change above the
+  quote is absorbed and recorded on the generation rather than making the balance negative.
+- Operators get a report of charged spend, provider cost and profit by UTC day and by user,
+  reconciled against Pixelforge's own `GET /v1/usage`.
 
 ## Stack
 
@@ -115,12 +121,45 @@ decimal strings for rates and exact integer token counts, so money never passes 
 - A quote uses the documented token model: text ≈ characters / 4 (±15%), 765 input image tokens
   per reference, exact output tokens by quality/size, and the per-quality reasoning range.
 - The worst-case quote is shown to the user ("pay at most") and snapshotted on the generation.
+- The same worst-case amount is **reserved** from the user's available credits before the
+  generation is queued. The reserve locks the user row, so two concurrent submits cannot spend
+  the same credits.
 - On success, the provider cost is recomputed from the generation's **stored rates** and its
-  reported usage, then the 25% markup is applied. If that would exceed the quoted maximum, the
-  charge is capped at the quote — but never below provider cost, so a rare rate change cannot
-  become a loss. The divergence is logged.
+  reported usage, then the 25% markup is applied. The hold is released and the actual debit is
+  taken in one transaction. The nominal charge is never below provider cost; the user debit is
+  capped at the held quote, so a rare rate change above the quote becomes an absorbed overage
+  (logged and stored as the difference between `charged_nano` and `settled_charge_nano`).
+- A failed generation releases the whole hold and charges nothing. A provisional
+  `submit_failed` keeps the hold until reconciliation proves whether Pixelforge accepted the
+  generation, so a late success can still settle correctly. Reconciliation is bounded to recent
+  rows; an unresolved hold older than 24 hours is released by a scheduled sweep so credits
+  cannot be frozen forever.
 - `completed_at` is the provider's completion time, so reports aggregate on the UTC day Pixelforge
   bills.
+
+## Credits, balances and the operator report
+
+**Credits.** The dashboard shows available credits (`owned − held`) next to the generator and
+blocks submit when the worst-case quote exceeds them. The Credits page has $5/$10/$25 simulated
+top-ups and a ledger that explains every purchase, hold, release and charge. A user can still
+generate while a previous generation is running as long as the remaining available balance covers
+the new worst-case quote.
+
+**Operator access.** Registration never grants operator access. Provision the operator
+explicitly after deployment with:
+
+```bash
+sail artisan pixelforge:make-admin person@example.com
+```
+
+The **Operator report** link appears in the sidebar for admins. It shows charged spend (what users
+paid), provider cost (what Pixelforge charged us) and profit for each UTC completion day and each
+user, plus a reconciliation strip that compares our provider-cost total with a
+`GET /v1/usage` call for the selected range. Pixelforge caps that endpoint at 92 days, so the
+report applies the same limit. Provider usage is cached for a minute on normal page loads; the
+Apply button and quick ranges pass `refresh=1` to bypass that cache and show Pixelforge immediately.
+If Pixelforge is unavailable, the local report still renders and the strip says reconciliation
+could not be loaded.
 
 ## Webhook robustness
 
@@ -131,6 +170,9 @@ decimal strings for rates and exact integer token counts, so money never passes 
 - The state machine only moves forward, and `succeeded`/`failed` are final. A late `processing`
   event cannot reopen a finished generation. The one exception is an ambiguous `submit_failed`:
   a late success is still allowed to settle it so a provider-accepted generation is not lost.
+- Ambiguous submissions are replayed only for a bounded window. If Pixelforge never confirms
+  one, the scheduled stale-hold sweep releases the reservation and closes the row, so credits
+  cannot stay frozen forever.
 - Cost columns are written once, under a row lock, only on success.
 - A scheduled poller reconciles any generation that has not reached a terminal state, covering
   webhooks that were never delivered.
@@ -147,11 +189,16 @@ sail npm test          # front-end components (Vitest)
 The backend suite runs against the Sail Postgres `testing` database and uses `Http::fake`, so it
 never calls Pixelforge or needs credentials. It covers the documented worked example, quote ranges, idempotent retries,
 signature failures, duplicate deliveries, out-of-order events, exact settlement, failures, image
-storage, webhook pruning and the polling fallback.
+storage, webhook pruning and the polling fallback. The stretch-goal tests add:
+credit reservation and overdraw prevention, exact hold settlement, full refund on failure,
+ambiguous-submit holds, legacy rows without a hold, the credit ledger, admin authorization,
+per-day/per-user report totals, range validation, first-user operator promotion, and
+`/v1/usage` reconciliation (including a graceful provider outage).
 
 The front-end suite uses Vitest + `@vue/test-utils` with happy-dom. It covers the generation
-progress stages and settled/failed costs, the image-zoom dialog, and the reference-image repeater
-limits. Run it in watch mode with `sail npm run test:watch`.
+progress stages and settled/failed costs, the image-zoom dialog, the reference-image repeater
+limits, and the dashboard's insufficient-credit submit gate. Run it in watch mode with
+`sail npm run test:watch`.
 
 ```bash
 sail exec -T app bash -lc './vendor/bin/pint --test && ./vendor/bin/phpstan analyse --no-progress'
@@ -201,5 +248,6 @@ using <http://localhost:8001> (Sail's nginx). It does not include the scheduler,
 
 ## Scope
 
-This branch contains the five required items. Credit balances and the admin report are stretch
-goals implemented separately.
+This branch contains the five required items plus both stretch goals: credit balances with a
+simulated purchase flow and affordability gating, and an operator report reconciled against
+Pixelforge's own usage endpoint.

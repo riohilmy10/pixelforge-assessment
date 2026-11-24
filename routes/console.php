@@ -40,3 +40,10 @@ Schedule::command('pixelforge:reconcile-ambiguous-submissions')
     ->everyFiveMinutes()
     ->withoutOverlapping()
     ->onOneServer();
+
+// A row that never resolves must not freeze credits forever. Release its hold after
+// the reconciliation window and close the case with an explanatory error.
+Schedule::command('pixelforge:release-stale-holds')
+    ->hourly()
+    ->withoutOverlapping()
+    ->onOneServer();

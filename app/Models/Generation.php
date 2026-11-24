@@ -26,8 +26,10 @@ use Illuminate\Support\Facades\Storage;
  * @property string|null $stored_image_path
  * @property int|null $provider_cost_nano
  * @property int|null $charged_nano
+ * @property int|null $settled_charge_nano
  * @property int $estimated_provider_cost_nano
  * @property int $estimated_charged_nano
+ * @property int $reserved_nano
  * @property string|null $error_code
  * @property string|null $error_message
  * @property CarbonImmutable|null $started_at
@@ -53,8 +55,10 @@ use Illuminate\Support\Facades\Storage;
     'stored_image_path',
     'provider_cost_nano',
     'charged_nano',
+    'settled_charge_nano',
     'estimated_provider_cost_nano',
     'estimated_charged_nano',
+    'reserved_nano',
     'error_code',
     'error_message',
     'started_at',
@@ -99,6 +103,12 @@ class Generation extends Model
             'reference_images' => 'array',
             'rates' => 'array',
             'usage' => 'array',
+            'provider_cost_nano' => 'integer',
+            'charged_nano' => 'integer',
+            'settled_charge_nano' => 'integer',
+            'estimated_provider_cost_nano' => 'integer',
+            'estimated_charged_nano' => 'integer',
+            'reserved_nano' => 'integer',
             'image_url_expires_at' => 'datetime',
             'started_at' => 'datetime',
             'completed_at' => 'datetime',
@@ -181,6 +191,8 @@ class Generation extends Model
      */
     public function toUiArray(): array
     {
+        $actualCharge = $this->settled_charge_nano ?? $this->charged_nano;
+
         return [
             'id' => $this->id,
             'status' => $this->status,
@@ -195,8 +207,8 @@ class Generation extends Model
             'error_message' => $this->error_message,
             'estimated_cost' => Money::toDecimal($this->estimated_charged_nano),
             'estimated_cost_display' => Money::display($this->estimated_charged_nano),
-            'actual_cost' => $this->charged_nano === null ? null : Money::toDecimal($this->charged_nano),
-            'actual_cost_display' => $this->charged_nano === null ? null : Money::display($this->charged_nano),
+            'actual_cost' => $actualCharge === null ? null : Money::toDecimal($actualCharge),
+            'actual_cost_display' => $actualCharge === null ? null : Money::display($actualCharge),
             'created_at' => $this->created_at?->toIso8601String(),
             'completed_at' => $this->completed_at?->toIso8601String(),
         ];
