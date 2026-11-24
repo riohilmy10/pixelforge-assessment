@@ -37,6 +37,7 @@ export type Generation = {
 export type Estimate = {
     text_tokens: { typical: number; max: number };
     image_tokens: number;
+    per_reference_image: number;
     output_tokens: number;
     reasoning_tokens: { typical: number; max: number };
     provider_cost: {

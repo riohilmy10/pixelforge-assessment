@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import GenerationCard from '@/components/GenerationCard.vue';
 import InputError from '@/components/InputError.vue';
 import ReferenceImagesInput from '@/components/ReferenceImagesInput.vue';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -98,6 +99,66 @@ const quoteMatchesInputs = computed(
     () =>
         quote.value !== null && quotedSignature.value === quoteSignature.value,
 );
+
+/** Keep the panel structure visible while a new quote is in flight. */
+const quoteLoading = computed(
+    () => quoting.value || quote.value === null || !quoteMatchesInputs.value,
+);
+
+/** The backend can estimate an empty prompt, but there is nothing to submit yet. */
+const hasPrompt = computed(() => form.prompt.trim().length > 0);
+
+/**
+ * Empty-draft placeholders. Output and reasoning token counts are independent of the
+ * prompt, so we can show them without an estimate request. These mirror the documented
+ * provider defaults; the first real quote replaces them with the server's values.
+ */
+const EMPTY_OUTPUT_TOKENS: Record<string, Record<string, number>> = {
+    low: { '1024x1024': 280, '1536x1024': 420, '1024x1536': 420 },
+    medium: { '1024x1024': 1100, '1536x1024': 1650, '1024x1536': 1650 },
+    high: { '1024x1024': 4300, '1536x1024': 6450, '1024x1536': 6450 },
+};
+
+const EMPTY_REASONING_TOKENS: Record<string, { min: number; max: number }> = {
+    low: { min: 0, max: 500 },
+    medium: { min: 200, max: 2000 },
+    high: { min: 1000, max: 8000 },
+};
+
+const EMPTY_PER_REFERENCE_IMAGE = 765;
+
+const emptyEstimate = computed<Estimate>(() => {
+    const output = EMPTY_OUTPUT_TOKENS[form.quality]?.[form.size] ?? 0;
+    const reasoning = EMPTY_REASONING_TOKENS[form.quality] ?? {
+        min: 0,
+        max: 0,
+    };
+
+    return {
+        text_tokens: { typical: 0, max: 0 },
+        image_tokens: references.value.length * EMPTY_PER_REFERENCE_IMAGE,
+        per_reference_image: EMPTY_PER_REFERENCE_IMAGE,
+        output_tokens: output,
+        reasoning_tokens: {
+            typical: Math.round((reasoning.min + reasoning.max) / 2),
+            max: reasoning.max,
+        },
+        provider_cost: {
+            typical: '0.000000000',
+            max: '0.000000000',
+            typical_nano: 0,
+            max_nano: 0,
+        },
+        charged: {
+            typical: '0.000000000',
+            max: '0.000000000',
+            typical_nano: 0,
+            max_nano: 0,
+            typical_display: '$0.0000',
+            max_display: '$0.0000',
+        },
+    };
+});
 
 /**
  * The server holds the same worst-case quote before creating anything. Showing the gate
@@ -246,6 +307,15 @@ function scheduleQuote(): void {
     quoting.value = false;
 
     window.clearTimeout(quoteTimer);
+
+    if (!hasPrompt.value) {
+        quote.value = emptyEstimate.value;
+        quotedSignature.value = quoteSignature.value;
+        form.quoted_max = '';
+
+        return;
+    }
+
     quoteTimer = window.setTimeout(() => void refreshQuote(), 300);
 }
 
@@ -270,6 +340,7 @@ function submit(): void {
     if (
         form.processing ||
         quoting.value ||
+        !hasPrompt.value ||
         !quoteMatchesInputs.value ||
         !quote.value ||
         insufficientCredits.value
@@ -494,6 +565,7 @@ onMounted(() => {
                             v-model="form.reference_images"
                             :error="form.errors.reference_images"
                             :max="options.reference_images_max"
+                            :token-cost="quote?.per_reference_image"
                         />
 
                         <Button
@@ -501,6 +573,7 @@ onMounted(() => {
                             :disabled="
                                 form.processing ||
                                 quoting ||
+                                !hasPrompt ||
                                 !quoteMatchesInputs ||
                                 insufficientCredits
                             "
@@ -528,8 +601,9 @@ onMounted(() => {
             <!-- Money panel: the worst case is prominent because that is the promise,
                  while the typical figure explains what most generations cost. -->
             <Card class="h-fit">
-                <CardHeader>
+                <CardHeader class="space-y-1">
                     <CardTitle class="text-base">Price estimate</CardTitle>
+                    <p class="text-xs text-muted-foreground">For this draft</p>
                 </CardHeader>
                 <CardContent class="space-y-4">
                     <div v-if="quoteError" class="text-sm text-destructive">
@@ -545,20 +619,6 @@ onMounted(() => {
                         </Button>
                     </div>
 
-                    <div
-                        v-else-if="!quote"
-                        class="text-sm text-muted-foreground"
-                    >
-                        Calculating…
-                    </div>
-
-                    <div
-                        v-else-if="!quoteMatchesInputs"
-                        class="text-sm text-muted-foreground"
-                    >
-                        Calculating…
-                    </div>
-
                     <template v-else>
                         <div>
                             <p
@@ -566,12 +626,20 @@ onMounted(() => {
                             >
                                 Estimated maximum
                             </p>
-                            <p class="text-3xl font-semibold">
-                                {{ quote.charged.max_display }}
+                            <Skeleton v-if="quoteLoading" class="h-9 w-32" />
+                            <p v-else class="text-3xl font-semibold">
+                                {{ quote?.charged.max_display }}
                             </p>
-                            <p class="mt-1 text-sm text-muted-foreground">
+                            <Skeleton
+                                v-if="quoteLoading"
+                                class="mt-2 h-4 w-28"
+                            />
+                            <p
+                                v-else
+                                class="mt-1 text-sm text-muted-foreground"
+                            >
                                 usually about
-                                {{ quote.charged.typical_display }}
+                                {{ quote?.charged.typical_display }}
                             </p>
                         </div>
 
@@ -581,27 +649,55 @@ onMounted(() => {
                             <div class="flex justify-between">
                                 <dt>Input text</dt>
                                 <dd>
-                                    {{ quote.text_tokens.typical }}–{{
-                                        quote.text_tokens.max
-                                    }}
-                                    tokens
+                                    <Skeleton
+                                        v-if="quoteLoading"
+                                        class="h-3 w-16"
+                                    />
+                                    <span v-else>
+                                        {{ quote?.text_tokens.typical }}–{{
+                                            quote?.text_tokens.max
+                                        }}
+                                        tokens
+                                    </span>
                                 </dd>
                             </div>
                             <div class="flex justify-between">
                                 <dt>Input images</dt>
-                                <dd>{{ quote.image_tokens }} tokens</dd>
+                                <dd>
+                                    <Skeleton
+                                        v-if="quoteLoading"
+                                        class="h-3 w-16"
+                                    />
+                                    <span v-else>
+                                        {{ quote?.image_tokens }} tokens
+                                    </span>
+                                </dd>
                             </div>
                             <div class="flex justify-between">
                                 <dt>Output</dt>
-                                <dd>{{ quote.output_tokens }} tokens</dd>
+                                <dd>
+                                    <Skeleton
+                                        v-if="quoteLoading"
+                                        class="h-3 w-16"
+                                    />
+                                    <span v-else>
+                                        {{ quote?.output_tokens }} tokens
+                                    </span>
+                                </dd>
                             </div>
                             <div class="flex justify-between">
                                 <dt>Reasoning</dt>
                                 <dd>
-                                    {{ quote.reasoning_tokens.typical }}–{{
-                                        quote.reasoning_tokens.max
-                                    }}
-                                    tokens
+                                    <Skeleton
+                                        v-if="quoteLoading"
+                                        class="h-3 w-16"
+                                    />
+                                    <span v-else>
+                                        {{ quote?.reasoning_tokens.typical }}–{{
+                                            quote?.reasoning_tokens.max
+                                        }}
+                                        tokens
+                                    </span>
                                 </dd>
                             </div>
                         </dl>

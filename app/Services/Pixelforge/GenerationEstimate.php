@@ -18,6 +18,7 @@ final class GenerationEstimate
         public readonly int $textTokensTypical,
         public readonly int $textTokensMax,
         public readonly int $imageTokens,
+        public readonly int $perReferenceImage,
         public readonly int $outputTokens,
         public readonly int $reasoningTokensTypical,
         public readonly int $reasoningTokensMax,
@@ -38,6 +39,7 @@ final class GenerationEstimate
                 'max' => $this->textTokensMax,
             ],
             'image_tokens' => $this->imageTokens,
+            'per_reference_image' => $this->perReferenceImage,
             'output_tokens' => $this->outputTokens,
             'reasoning_tokens' => [
                 'typical' => $this->reasoningTokensTypical,

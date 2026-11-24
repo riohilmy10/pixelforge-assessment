@@ -38,12 +38,12 @@ describe('ReferenceImagesInput', () => {
         expect(wrapper.emitted('update:modelValue')?.[0]).toEqual([['']]);
     });
 
-    it('describes the cost without hardcoding the provider token count', () => {
+    it('shows the provider token cost for each reference image', () => {
         const wrapper = mount(ReferenceImagesInput, {
-            props: { modelValue: [''] },
+            props: { modelValue: [''], tokenCost: 765 },
         });
 
+        expect(wrapper.text()).toContain('765 input image tokens');
         expect(wrapper.text()).toContain('included in the estimate above');
-        expect(wrapper.text()).not.toContain('765');
     });
 });

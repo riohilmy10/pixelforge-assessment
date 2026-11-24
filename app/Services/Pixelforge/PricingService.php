@@ -104,6 +104,7 @@ class PricingService
             textTokensTypical: $textTypical,
             textTokensMax: $textMax,
             imageTokens: $image,
+            perReferenceImage: (int) $tokens['per_reference_image'],
             outputTokens: $output,
             reasoningTokensTypical: $reasoningTypical,
             reasoningTokensMax: $reasoningMax,

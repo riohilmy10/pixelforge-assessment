@@ -35,6 +35,7 @@ const estimate = {
     },
     text_tokens: { typical: 1, max: 2 },
     image_tokens: 0,
+    per_reference_image: 765,
     output_tokens: 1,
     reasoning_tokens: { typical: 1, max: 2 },
 } as Estimate;
@@ -140,11 +141,62 @@ describe('Dashboard', () => {
             ),
         );
         const wrapper = mountDashboard();
+        await wrapper.get('textarea').setValue('A lighthouse');
         await wrapper.get('input[type="url"]').setValue('bad URL');
         await vi.advanceTimersByTimeAsync(300);
 
         expect(wrapper.text()).toContain('Enter a valid image URL.');
         expect(wrapper.text()).not.toContain('Could not load the price');
+        wrapper.unmount();
+    });
+
+    it('shows a zero price but keeps the static token counts for an empty draft', async () => {
+        const fetchQuote = vi
+            .fn()
+            .mockImplementation(async () => quoteResponse());
+        vi.stubGlobal('fetch', fetchQuote);
+
+        const wrapper = mountDashboard();
+
+        await vi.advanceTimersByTimeAsync(300);
+
+        expect(fetchQuote).not.toHaveBeenCalled();
+        expect(wrapper.text()).toContain('$0.0000');
+        expect(wrapper.text()).toContain('1100 tokens');
+        expect(wrapper.text()).toContain('1100–2000 tokens');
+        expect(wrapper.text()).not.toContain('Calculating');
+        expect(
+            wrapper.get('button[type="submit"]').attributes('disabled'),
+        ).toBeDefined();
+
+        await wrapper.get('textarea').setValue('A lighthouse');
+        await vi.advanceTimersByTimeAsync(300);
+
+        expect(fetchQuote).toHaveBeenCalledTimes(1);
+        expect(wrapper.text()).toContain('$0.1');
+        expect(wrapper.text()).not.toContain('$0.0000');
+
+        wrapper.unmount();
+    });
+
+    it('shows skeletons in the price panel while a new quote is pending', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn().mockImplementation(async () => quoteResponse()),
+        );
+
+        const wrapper = mountDashboard();
+        await vi.advanceTimersByTimeAsync(300);
+
+        await wrapper.get('textarea').setValue('A lighthouse');
+
+        expect(wrapper.text()).toContain('Estimated maximum');
+        expect(wrapper.text()).not.toContain('Calculating');
+        expect(wrapper.find('[data-slot="skeleton"]').exists()).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(300);
+        expect(wrapper.find('[data-slot="skeleton"]').exists()).toBe(false);
+
         wrapper.unmount();
     });
 
