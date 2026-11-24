@@ -16,6 +16,7 @@ const props = defineProps<{
     modelValue: string[];
     error?: string;
     max?: number;
+    tokenCost?: number;
 }>();
 
 const emit = defineEmits<{
@@ -62,8 +63,9 @@ function remove(index: number): void {
             </Button>
         </div>
         <p class="text-xs text-muted-foreground">
-            Optional http(s) URLs. Each one adds extra input image tokens and is
-            included in the estimate above.
+            Optional http(s) URLs. Each reference image adds
+            {{ tokenCost ?? 765 }}
+            input image tokens and is included in the estimate above.
         </p>
 
         <div
