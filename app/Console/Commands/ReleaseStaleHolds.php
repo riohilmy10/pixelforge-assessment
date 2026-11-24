@@ -42,18 +42,44 @@ class ReleaseStaleHolds extends Command
             ->limit($limit)
             ->get();
 
-        foreach ($generations as $generation) {
-            DB::transaction(function () use ($credits, $generation): void {
-                $credits->release($generation, 'Ambiguous submission expired — hold released');
+        $released = 0;
 
-                $generation->forceFill([
+        foreach ($generations as $generation) {
+            $didRelease = DB::transaction(function () use ($credits, $generation, $hours): bool {
+                // The batch query ran before this transaction. A webhook or reconciliation
+                // can reopen the row to queued/processing in between; releasing that hold
+                // would turn a live generation into a free one. Recheck every condition
+                // under the row lock and write the close-out to that same locked model.
+                $locked = Generation::query()
+                    ->whereKey($generation->getKey())
+                    ->where('status', Generation::STATUS_FAILED)
+                    ->where('error_code', 'submit_failed')
+                    ->where('reserved_nano', '>', 0)
+                    ->whereNotNull('submission_attempted_at')
+                    ->where('submission_attempted_at', '<=', now()->subHours($hours))
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($locked === null) {
+                    return false;
+                }
+
+                $credits->release($locked, 'Ambiguous submission expired — hold released');
+
+                $locked->forceFill([
                     'error_code' => 'submit_expired',
                     'error_message' => 'Pixelforge did not confirm this submission in time. The credit hold was released.',
                 ])->save();
+
+                return true;
             });
+
+            if ($didRelease) {
+                $released++;
+            }
         }
 
-        $this->info("Released {$generations->count()} stale credit hold(s).");
+        $this->info("Released {$released} stale credit hold(s).");
 
         return self::SUCCESS;
     }

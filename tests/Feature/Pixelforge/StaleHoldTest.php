@@ -49,6 +49,45 @@ class StaleHoldTest extends TestCase
             ->count());
     }
 
+    public function test_a_row_reopened_between_the_query_and_the_transaction_is_not_released(): void
+    {
+        $held = 10_000_000;
+        $user = User::factory()->withCredits(1_000_000_000)->create();
+        $user->forceFill(['reserved_nano' => $held])->save();
+
+        $generation = $this->ambiguousGeneration($user, $held, now()->subHours(25));
+        $reopened = false;
+
+        // Simulate the race: the row is selected as stale, then a webhook/reconciliation
+        // moves it to queued before the sweep starts its transaction.
+        Generation::retrieved(function (Generation $model) use ($generation, &$reopened): void {
+            if ($model->getKey() !== $generation->id || $reopened) {
+                return;
+            }
+
+            $reopened = true;
+
+            Generation::query()->whereKey($generation->id)->update([
+                'status' => Generation::STATUS_QUEUED,
+                'error_code' => null,
+                'error_message' => null,
+            ]);
+        });
+
+        $this->artisan('pixelforge:release-stale-holds', ['--hours' => 24])
+            ->assertSuccessful();
+
+        $generation->refresh();
+        $user->refresh();
+
+        $this->assertSame(Generation::STATUS_QUEUED, $generation->status);
+        $this->assertNull($generation->error_code);
+        $this->assertSame($held, $generation->reserved_nano);
+        $this->assertSame($held, $user->reserved_nano);
+        $this->assertSame(1_000_000_000, $user->credit_balance_nano);
+        $this->assertSame(0, CreditTransaction::query()->where('generation_id', $generation->id)->count());
+    }
+
     public function test_the_reconciliation_sweep_leaves_rows_older_than_its_bound_alone(): void
     {
         Http::fake();

@@ -229,6 +229,52 @@ class AdminReportTest extends TestCase
             );
     }
 
+    public function test_a_usage_row_without_a_cost_makes_reconciliation_unavailable(): void
+    {
+        Http::fake([
+            '*/usage*' => Http::response([
+                'object' => 'usage',
+                'data' => [
+                    ['date' => '2026-11-24', 'generations' => 1],
+                ],
+                'total' => ['generations' => 1, 'cost_usd' => '0.000000000'],
+            ]),
+        ]);
+
+        $admin = User::factory()->admin()->create();
+
+        $this->actingAs($admin)
+            ->get(route('admin.report'))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->where('report.provider.available', false)
+                ->where('report.provider.error', 'Pixelforge usage could not be loaded. Local records are still shown.')
+                ->where('report.totals.provider_matches', false)
+            );
+    }
+
+    public function test_an_empty_usage_range_is_a_valid_zero(): void
+    {
+        Http::fake([
+            '*/usage*' => Http::response([
+                'object' => 'usage',
+                'data' => [],
+                'total' => ['generations' => 0, 'cost_usd' => '0.000000000'],
+            ]),
+        ]);
+
+        $admin = User::factory()->admin()->create();
+
+        $this->actingAs($admin)
+            ->get(route('admin.report'))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->where('report.provider.available', true)
+                ->where('report.totals.provider_reported_cost_nano', 0)
+                ->where('report.totals.provider_matches', true)
+            );
+    }
+
     public function test_a_provider_usage_failure_degrades_without_breaking_the_report(): void
     {
         Http::fake([
