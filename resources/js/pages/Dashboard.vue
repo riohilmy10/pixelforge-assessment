@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Head, Link, useForm, usePage, usePoll } from '@inertiajs/vue3';
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import GenerationCard from '@/components/GenerationCard.vue';
 import InputError from '@/components/InputError.vue';
 import ReferenceImagesInput from '@/components/ReferenceImagesInput.vue';
@@ -229,28 +229,32 @@ async function refreshQuote(): Promise<void> {
 }
 
 /**
- * Re-quote whenever an input that affects token counts changes. Joining the URL list
- * gives Vue one stable scalar to watch while still reacting to add/remove/edit.
+ * Invalidate the displayed promise immediately. Until a quote for the exact current
+ * inputs arrives, the form cannot submit.
+ *
+ * This is only called from client lifecycle hooks or the input watcher; Inertia may
+ * evaluate this component in Node for SSR, where `window` does not exist.
  */
-watch(
-    quoteSignature,
-    () => {
-        // Invalidate the displayed promise immediately. Until a quote for these exact
-        // inputs arrives, the form cannot submit.
-        quoteRequestId++;
-        quoteController?.abort();
-        quoteController = null;
-        clearQuoteReferenceError();
-        quote.value = null;
-        quotedSignature.value = null;
-        quoteError.value = null;
-        quoting.value = false;
+function scheduleQuote(): void {
+    quoteRequestId++;
+    quoteController?.abort();
+    quoteController = null;
+    clearQuoteReferenceError();
+    quote.value = null;
+    quotedSignature.value = null;
+    quoteError.value = null;
+    quoting.value = false;
 
-        window.clearTimeout(quoteTimer);
-        quoteTimer = window.setTimeout(() => void refreshQuote(), 300);
-    },
-    { immediate: true },
-);
+    window.clearTimeout(quoteTimer);
+    quoteTimer = window.setTimeout(() => void refreshQuote(), 300);
+}
+
+/**
+ * Re-quote whenever an input that affects token counts changes. Joining the URL list
+ * gives Vue one stable scalar to watch while still reacting to add/remove/edit. The
+ * initial request is started in onMounted so SSR never touches browser globals.
+ */
+watch(quoteSignature, scheduleQuote);
 
 onBeforeUnmount(() => {
     quoteRequestId++;
@@ -350,17 +354,21 @@ const poll = usePoll(
     { mode: 'rest', background: 'pause', autoStart: false },
 );
 
-watch(
-    hasActive,
-    (active) => {
-        if (active && !form.processing) {
-            poll.start();
-        } else {
-            poll.stop();
-        }
-    },
-    { immediate: true },
-);
+watch(hasActive, (active) => {
+    if (active && !form.processing) {
+        poll.start();
+    } else {
+        poll.stop();
+    }
+});
+
+onMounted(() => {
+    scheduleQuote();
+
+    if (hasActive.value && !form.processing) {
+        poll.start();
+    }
+});
 </script>
 
 <template>
