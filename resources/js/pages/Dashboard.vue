@@ -14,12 +14,18 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
+import { index as creditsRoute } from '@/routes/credits';
 import {
     estimate as estimateRoute,
     index as historyRoute,
     store as storeRoute,
 } from '@/routes/generations';
-import type { Estimate, Generation, GenerationOptions } from '@/types';
+import type {
+    BalanceSummary,
+    Estimate,
+    Generation,
+    GenerationOptions,
+} from '@/types';
 
 defineOptions({
     layout: {
@@ -35,6 +41,7 @@ defineOptions({
 const props = defineProps<{
     generations: Generation[];
     options: GenerationOptions;
+    balance: BalanceSummary;
 }>();
 
 /**
@@ -90,6 +97,17 @@ const quoteSignature = computed(() => JSON.stringify(quoteInputs.value));
 const quoteMatchesInputs = computed(
     () =>
         quote.value !== null && quotedSignature.value === quoteSignature.value,
+);
+
+/**
+ * The server holds the same worst-case quote before creating anything. Showing the gate
+ * here too makes the refusal predictable instead of a surprise after submit.
+ */
+const insufficientCredits = computed(
+    () =>
+        quoteMatchesInputs.value &&
+        quote.value !== null &&
+        quote.value.charged.max_nano > props.balance.available_nano,
 );
 
 /**
@@ -249,7 +267,8 @@ function submit(): void {
         form.processing ||
         quoting.value ||
         !quoteMatchesInputs.value ||
-        !quote.value
+        !quote.value ||
+        insufficientCredits.value
     ) {
         return;
     }
@@ -317,7 +336,9 @@ let cancelPoll: (() => void) | undefined;
 const poll = usePoll(
     3000,
     {
-        only: ['generations'],
+        // Balance changes when a running generation settles and its hold is released,
+        // so keep the money strip in the same partial reload as the cards.
+        only: ['generations', 'balance'],
         onBefore: () => !form.processing,
         onCancelToken: (token) => {
             cancelPoll = () => token.cancel();
@@ -357,6 +378,33 @@ watch(
             class="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
         >
             {{ flash.error }}
+        </div>
+
+        <!-- Credits are the product's money unit, so the spendable amount is always on
+             screen next to the generator rather than hidden on a separate page. -->
+        <div
+            class="flex flex-wrap items-center justify-between gap-4 rounded-lg border bg-card px-4 py-3"
+        >
+            <div>
+                <p
+                    class="text-xs tracking-wide text-muted-foreground uppercase"
+                >
+                    Available credits
+                </p>
+                <p class="text-2xl font-semibold tabular-nums">
+                    {{ props.balance.available_display }}
+                </p>
+                <p class="text-xs text-muted-foreground">
+                    {{ props.balance.credit_balance_display }} owned
+                    <template v-if="props.balance.reserved_nano > 0">
+                        · {{ props.balance.reserved_display }} held for
+                        generations in progress
+                    </template>
+                </p>
+            </div>
+            <Button as-child variant="outline">
+                <Link :href="creditsRoute()">Buy credits</Link>
+            </Button>
         </div>
 
         <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -445,11 +493,26 @@ watch(
                             :disabled="
                                 form.processing ||
                                 quoting ||
-                                !quoteMatchesInputs
+                                !quoteMatchesInputs ||
+                                insufficientCredits
                             "
                         >
                             {{ form.processing ? 'Submitting…' : 'Generate' }}
                         </Button>
+                        <p
+                            v-if="insufficientCredits && quote"
+                            class="text-sm text-destructive"
+                        >
+                            You need up to {{ quote.charged.max_display }}, but
+                            only {{ props.balance.available_display }} is
+                            available.
+                            <Link
+                                :href="creditsRoute()"
+                                class="font-medium underline underline-offset-4"
+                            >
+                                Buy credits
+                            </Link>
+                        </p>
                     </form>
                 </CardContent>
             </Card>

@@ -1,6 +1,14 @@
 <script setup lang="ts">
-import { Link } from '@inertiajs/vue3';
-import { BookOpen, FolderGit2, History, LayoutGrid } from '@lucide/vue';
+import { Link, usePage } from '@inertiajs/vue3';
+import {
+    BarChart3,
+    BookOpen,
+    FolderGit2,
+    History,
+    LayoutGrid,
+    Wallet,
+} from '@lucide/vue';
+import { computed } from 'vue';
 import AppLogo from '@/components/AppLogo.vue';
 import NavFooter from '@/components/NavFooter.vue';
 import NavMain from '@/components/NavMain.vue';
@@ -14,11 +22,20 @@ import {
     SidebarMenuButton,
     SidebarMenuItem,
 } from '@/components/ui/sidebar';
+import { report as adminReport } from '@/routes/admin';
 import { dashboard } from '@/routes';
+import { index as credits } from '@/routes/credits';
 import { index as generations } from '@/routes/generations';
 import type { NavItem } from '@/types';
 
-const mainNavItems: NavItem[] = [
+const page = usePage();
+const isAdmin = computed(
+    () =>
+        (page.props.auth as { user?: { is_admin?: boolean } }).user
+            ?.is_admin === true,
+);
+
+const mainNavItems = computed<NavItem[]>(() => [
     {
         title: 'Dashboard',
         href: dashboard(),
@@ -29,7 +46,21 @@ const mainNavItems: NavItem[] = [
         href: generations(),
         icon: History,
     },
-];
+    {
+        title: 'Credits',
+        href: credits(),
+        icon: Wallet,
+    },
+    ...(isAdmin.value
+        ? [
+              {
+                  title: 'Operator report',
+                  href: adminReport(),
+                  icon: BarChart3,
+              },
+          ]
+        : []),
+]);
 
 const footerNavItems: NavItem[] = [
     {

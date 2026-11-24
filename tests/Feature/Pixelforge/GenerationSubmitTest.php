@@ -68,7 +68,7 @@ class GenerationSubmitTest extends TestCase
         $this->fakePricing();
         Queue::fake();
 
-        $user = User::factory()->create();
+        $user = User::factory()->withCredits()->create();
 
         $response = $this->actingAs($user)->post(route('generations.store'), [
             'quoted_max' => '0.467343750',
@@ -95,7 +95,7 @@ class GenerationSubmitTest extends TestCase
         $this->fakePricing();
         Queue::fake();
 
-        $user = User::factory()->create();
+        $user = User::factory()->withCredits()->create();
         $inputs = [
             'prompt' => 'A lighthouse',
             'size' => '1024x1024',

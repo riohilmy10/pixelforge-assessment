@@ -5,6 +5,9 @@ export type User = {
     avatar?: string;
     email_verified_at: string | null;
     two_factor_enabled?: boolean;
+    is_admin?: boolean;
+    credit_balance_nano?: number;
+    reserved_nano?: number;
     created_at: string;
     updated_at: string;
     [key: string]: unknown;

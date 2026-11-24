@@ -17,9 +17,13 @@ class DatabaseSeeder extends Seeder
     {
         // User::factory(10)->create();
 
-        User::factory()->create([
-            'name' => 'Test User',
-            'email' => 'test@example.com',
-        ]);
+        // Seed a normal demo account only. Operator access is provisioned explicitly with
+        // `php artisan pixelforge:make-admin`, never by seeding a known-credential admin.
+        User::factory()
+            ->withCredits()
+            ->create([
+                'name' => 'Test User',
+                'email' => 'test@example.com',
+            ]);
     }
 }

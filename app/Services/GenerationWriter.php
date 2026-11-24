@@ -28,6 +28,8 @@ use Illuminate\Support\Facades\Storage;
  */
 class GenerationWriter
 {
+    public function __construct(private readonly CreditService $credits) {}
+
     /**
      * Apply a provider generation object, which may be the 202 response, a webhook body
      * or a polled `GET /v1/generations/{id}` result.
@@ -157,6 +159,13 @@ class GenerationWriter
             $locked->last_synced_at = now();
             $locked->save();
 
+            // `submit_failed` is provisional: the provider may still have accepted the
+            // generation, so keep the hold until reconciliation resolves the row. Every
+            // definitive failure returns the credits immediately.
+            if ($errorCode !== 'submit_failed') {
+                $this->credits->release($locked, 'Generation failed — hold released');
+            }
+
             return $locked;
         });
     }
@@ -223,6 +232,10 @@ class GenerationWriter
             : now();
         $locked->submitted_at ??= now();
         $locked->save();
+
+        // Charge exactly once, in the same transaction as the terminal status. The
+        // generation's hold makes this idempotent across duplicate webhooks and pollers.
+        $this->credits->settle($locked);
     }
 
     /**
@@ -245,6 +258,9 @@ class GenerationWriter
             : now();
         $locked->submitted_at ??= now();
         $locked->save();
+
+        // A failed generation is free: return the full hold, if there is one.
+        $this->credits->release($locked, 'Generation failed — hold released');
     }
 
     /**

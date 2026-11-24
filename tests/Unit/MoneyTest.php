@@ -38,6 +38,7 @@ class MoneyTest extends TestCase
         $this->assertSame('0.373875000', Money::toDecimal(373_875_000));
         $this->assertSame('$0.046125', Money::display(46_125_000));
         $this->assertSame('$0', Money::display(0));
+        $this->assertSame('-$1.5', Money::display(-1_500_000_000));
     }
 
     public function test_applies_twenty_five_percent_markup(): void

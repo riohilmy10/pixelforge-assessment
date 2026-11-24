@@ -46,10 +46,14 @@ final class GenerationEstimate
             'provider_cost' => [
                 'typical' => Money::toDecimal($this->typicalProviderCostNano),
                 'max' => Money::toDecimal($this->maxProviderCostNano),
+                'typical_nano' => $this->typicalProviderCostNano,
+                'max_nano' => $this->maxProviderCostNano,
             ],
             'charged' => [
                 'typical' => Money::toDecimal($this->typicalChargedNano),
                 'max' => Money::toDecimal($this->maxChargedNano),
+                'typical_nano' => $this->typicalChargedNano,
+                'max_nano' => $this->maxChargedNano,
                 'typical_display' => Money::display($this->typicalChargedNano),
                 'max_display' => Money::display($this->maxChargedNano),
             ],

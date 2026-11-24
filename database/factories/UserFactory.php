@@ -37,6 +37,26 @@ class UserFactory extends Factory
     }
 
     /**
+     * Give the account operator access to the usage report.
+     */
+    public function admin(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'is_admin' => true,
+        ]);
+    }
+
+    /**
+     * Give the account a starting credit balance, in nanodollars.
+     */
+    public function withCredits(int $nano = 10_000_000_000): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'credit_balance_nano' => $nano,
+        ]);
+    }
+
+    /**
      * Indicate that the model's email address should be unverified.
      */
     public function unverified(): static

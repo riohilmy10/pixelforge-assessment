@@ -42,7 +42,10 @@ class GenerationService
 
     public const REFERENCE_IMAGES_MAX = 4;
 
-    public function __construct(private readonly PricingService $pricing) {}
+    public function __construct(
+        private readonly PricingService $pricing,
+        private readonly CreditService $credits,
+    ) {}
 
     /**
      * Data for the dashboard: the generator options plus the latest generations.
@@ -57,6 +60,7 @@ class GenerationService
         return [
             'generations' => $this->recentGenerations($user),
             'options' => $this->options(),
+            'balance' => $this->credits->summary($user),
         ];
     }
 
@@ -137,6 +141,11 @@ class GenerationService
                 'estimated_provider_cost_nano' => $estimate->maxProviderCostNano,
                 'estimated_charged_nano' => $estimate->maxChargedNano,
             ]);
+
+            // Hold the same worst case against the user's balance. The reservation locks
+            // the user row, so concurrent submits cannot both pass the affordability
+            // check; a refusal rolls this transaction (and the new row) back.
+            $this->credits->reserve($user, $generation, $estimate->maxChargedNano);
 
             SubmitGeneration::dispatch($generation->id);
 

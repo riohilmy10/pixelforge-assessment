@@ -23,6 +23,15 @@ export default defineConfig({
                 ),
             },
             {
+                find: /^@\/routes\/credits$/,
+                replacement: fileURLToPath(
+                    new URL(
+                        './resources/js/test/stubs/routes-credits.ts',
+                        import.meta.url,
+                    ),
+                ),
+            },
+            {
                 find: '@',
                 replacement: fileURLToPath(
                     new URL('./resources/js', import.meta.url),

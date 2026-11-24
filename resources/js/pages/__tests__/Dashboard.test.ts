@@ -21,14 +21,34 @@ vi.mock('@inertiajs/vue3', async (importOriginal) => ({
 const estimate = {
     charged: {
         max: '0.100000000',
+        max_nano: 100_000_000,
         max_display: '$0.1',
+        typical: '0.080000000',
+        typical_nano: 80_000_000,
         typical_display: '$0.08',
     },
+    provider_cost: {
+        typical: '0.060000000',
+        max: '0.080000000',
+        typical_nano: 60_000_000,
+        max_nano: 80_000_000,
+    },
     text_tokens: { typical: 1, max: 2 },
+    image_tokens: 0,
+    output_tokens: 1,
     reasoning_tokens: { typical: 1, max: 2 },
 } as Estimate;
 
-function mountDashboard(active = false) {
+const balance = {
+    credit_balance_nano: 10_000_000_000,
+    reserved_nano: 0,
+    available_nano: 10_000_000_000,
+    credit_balance_display: '$10',
+    reserved_display: '$0',
+    available_display: '$10',
+};
+
+function mountDashboard(active = false, available: typeof balance = balance) {
     return mount(Dashboard, {
         props: {
             generations: active
@@ -40,6 +60,7 @@ function mountDashboard(active = false) {
                 prompt_max: 4000,
                 reference_images_max: 4,
             },
+            balance: available,
         },
         global: { stubs: { GenerationCard: true, Link: true } },
     });
@@ -124,6 +145,33 @@ describe('Dashboard', () => {
 
         expect(wrapper.text()).toContain('Enter a valid image URL.');
         expect(wrapper.text()).not.toContain('Could not load the price');
+        wrapper.unmount();
+    });
+
+    it('blocks submit when the quote exceeds the available balance', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn().mockImplementation(async () => quoteResponse()),
+        );
+        const wrapper = mountDashboard(false, {
+            ...balance,
+            credit_balance_nano: 0,
+            available_nano: 0,
+            credit_balance_display: '$0',
+            available_display: '$0',
+        });
+
+        await wrapper.get('textarea').setValue('A lighthouse');
+        await vi.advanceTimersByTimeAsync(300);
+        await nextTick();
+
+        const generate = wrapper
+            .findAll('button')
+            .find((button) => button.text() === 'Generate');
+
+        expect(generate?.attributes('disabled')).toBeDefined();
+        expect(wrapper.text()).toContain('You need up to');
+        expect(wrapper.text()).toContain('$0');
         wrapper.unmount();
     });
 

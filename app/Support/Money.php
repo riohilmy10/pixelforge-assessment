@@ -80,10 +80,10 @@ final class Money
      */
     public static function display(int $nano): string
     {
-        $decimal = self::toDecimal($nano);
-        $decimal = rtrim(rtrim($decimal, '0'), '.');
+        $sign = $nano < 0 ? '-' : '';
+        $decimal = rtrim(rtrim(self::toDecimal(abs($nano)), '0'), '.');
 
-        return '$'.$decimal;
+        return $sign.'$'.$decimal;
     }
 
     /**

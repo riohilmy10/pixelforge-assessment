@@ -112,7 +112,9 @@ class PixelforgeClient
         return $this->send($this->request()->get('/usage', [
             'start_date' => $startDate,
             'end_date' => $endDate,
-        ]));
+        ]), [
+            'data' => ['required', 'array'],
+        ]);
     }
 
     /**

@@ -24,6 +24,9 @@ class CreateNewUser implements CreatesNewUsers
             'password' => $this->passwordRules(),
         ])->validate();
 
+        // Operator access is deliberately not derived from registration order. The first
+        // public signup must never become an operator; provision it explicitly with
+        // `php artisan pixelforge:make-admin` (or an environment allowlist) instead.
         return User::create([
             'name' => $input['name'],
             'email' => $input['email'],
