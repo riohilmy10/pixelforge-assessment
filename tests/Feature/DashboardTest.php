@@ -24,4 +24,13 @@ class DashboardTest extends TestCase
         $response = $this->get(route('dashboard'));
         $response->assertOk();
     }
+
+    public function test_users_without_a_verified_email_can_visit_the_dashboard()
+    {
+        $user = User::factory()->create(['email_verified_at' => null]);
+        $this->actingAs($user);
+
+        $response = $this->get(route('dashboard'));
+        $response->assertOk();
+    }
 }

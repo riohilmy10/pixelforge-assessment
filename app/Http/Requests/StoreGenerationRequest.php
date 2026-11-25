@@ -16,7 +16,7 @@ use Illuminate\Validation\Rule;
 class StoreGenerationRequest extends FormRequest
 {
     /**
-     * The route already sits behind `auth` and `verified` middleware.
+     * The route already sits behind the `auth` middleware.
      */
     public function authorize(): bool
     {
