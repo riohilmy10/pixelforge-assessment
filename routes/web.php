@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Route;
 
 Route::inertia('/', 'Welcome')->name('home');
 
-Route::middleware(['auth', 'verified'])->group(function () {
+Route::middleware(['auth'])->group(function () {
     // Dashboard = generator form + recent generations.
     Route::get('dashboard', [GenerationController::class, 'index'])->name('dashboard');
 
@@ -34,7 +34,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
 // Operator report: every customer's spend, provider cost and profit, reconciled against
 // Pixelforge's own /v1/usage for the selected UTC days.
-Route::middleware(['auth', 'verified', 'admin'])->group(function (): void {
+Route::middleware(['auth', 'admin'])->group(function (): void {
     Route::get('admin/report', [AdminReportController::class, 'index'])->name('admin.report');
 });
 
