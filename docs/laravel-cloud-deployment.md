@@ -348,6 +348,8 @@ APP_FALLBACK_LOCALE=en
 APP_FAKER_LOCALE=en_US
 BCRYPT_ROUNDS=12
 
+SESSION_DRIVER=database
+
 FILESYSTEM_DISK=local
 FILESYSTEM_IMAGE_DISK=images
 
@@ -370,7 +372,6 @@ them:
 ```text
 APP_NAME, APP_ENV, APP_DEBUG, APP_URL
 DB_CONNECTION, DB_HOST, DB_PORT, DB_DATABASE, DB_USERNAME, DB_PASSWORD
-SESSION_DRIVER=cookie
 CACHE_STORE=database
 SCHEDULE_CACHE_DRIVER=database
 LOG_CHANNEL=laravel-cloud-socket
@@ -378,9 +379,15 @@ LOG_STACK=FORMATTER(Monolog\Formatter\JsonFormatter)
 VITE_APP_NAME="${APP_NAME}"
 ```
 
-In particular, `SESSION_DRIVER=cookie` is expected on Laravel Cloud even though the local
-Sail environment uses `SESSION_DRIVER=database`. Cookie sessions work here; only override it
-with `SESSION_DRIVER=database` if you specifically want server-side sessions. Do not set
+Laravel Cloud injects `SESSION_DRIVER=cookie` by default, but this app overrides it with
+`SESSION_DRIVER=database`. The generation form accepts prompts up to 4,000 characters; when a
+long prompt fails validation, flashing the input and errors into a cookie can exceed the
+roughly 4 KB browser cookie limit, so the browser drops it and the redirect loses the errors.
+Database sessions avoid that limit and also support immediate revocation.
+
+Cookie sessions cannot revoke a copied cookie on logout; the browser's copy is invalidated, but
+a previously copied cookie remains usable until `SESSION_LIFETIME` expires (120 minutes by
+default). Use database sessions when logout must revoke access immediately. Do not set
 `LOG_CHANNEL=stderr`; it would override Cloud's socket logging.
 
 Do **not** set:
