@@ -338,27 +338,15 @@ Otherwise, leave mail unconfigured. Registration and generation testing still wo
 
 ## 7. Environment variables
 
-Set these in the Cloud environment. Cloud writes them into a `.env` file; you do not commit
-`.env`.
+Set these custom variables in the Cloud environment. Cloud writes them into a `.env` file; you
+do not commit `.env`.
 
 ```dotenv
-APP_NAME=Pixelforge
-APP_ENV=production
-APP_DEBUG=false
 APP_KEY=base64:...
-APP_URL=https://<your-assigned-domain>.laravel.cloud
 APP_LOCALE=en
 APP_FALLBACK_LOCALE=en
 APP_FAKER_LOCALE=en_US
 BCRYPT_ROUNDS=12
-
-LOG_CHANNEL=stderr
-LOG_LEVEL=debug
-
-DB_CONNECTION=pgsql
-
-SESSION_DRIVER=database
-CACHE_STORE=database
 
 FILESYSTEM_DISK=local
 FILESYSTEM_IMAGE_DISK=images
@@ -376,10 +364,28 @@ PIXELFORGE_WEBHOOK_SECRET=
 PIXELFORGE_MARKUP_PERCENT=25
 ```
 
+Laravel Cloud injects these values; leave them as-is unless you intentionally want to override
+them:
+
+```text
+APP_NAME, APP_ENV, APP_DEBUG, APP_URL
+DB_CONNECTION, DB_HOST, DB_PORT, DB_DATABASE, DB_USERNAME, DB_PASSWORD
+SESSION_DRIVER=cookie
+CACHE_STORE=database
+SCHEDULE_CACHE_DRIVER=database
+LOG_CHANNEL=laravel-cloud-socket
+LOG_STACK=FORMATTER(Monolog\Formatter\JsonFormatter)
+VITE_APP_NAME="${APP_NAME}"
+```
+
+In particular, `SESSION_DRIVER=cookie` is expected on Laravel Cloud even though the local
+Sail environment uses `SESSION_DRIVER=database`. Cookie sessions work here; only override it
+with `SESSION_DRIVER=database` if you specifically want server-side sessions. Do not set
+`LOG_CHANNEL=stderr`; it would override Cloud's socket logging.
+
 Do **not** set:
 
 ```text
-DB_HOST, DB_PORT, DB_DATABASE, DB_USERNAME, DB_PASSWORD
 QUEUE_CONNECTION            # managed queue sets this to cloud
 APP_PORT, VITE_PORT, FORWARD_DB_PORT, FORWARD_MAILPIT_PORT
 WWWUSER, WWWGROUP
@@ -424,11 +430,13 @@ CLI:
 cloud deploy
 ```
 
-or:
+To follow the deployment after it starts:
 
 ```bash
 cloud deploy:monitor
 ```
+
+`cloud deploy:monitor` only monitors an existing deployment; it does not start one.
 
 First deployments typically take 5-15 minutes; later deployments are usually 1-2 minutes.
 
